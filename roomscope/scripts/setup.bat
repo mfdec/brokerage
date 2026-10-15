@@ -5,7 +5,12 @@ setlocal
 cd /d "%~dp0.."
 
 set "PY="
-where py >nul 2>nul && set "PY=py -3"
+rem Prefer a Python that has binary wheels for everything RoomScope needs.
+for %%V in (3.12 3.11 3.13 3.10) do (
+    if not defined PY (
+        py -%%V -c "import sys" >nul 2>nul && set "PY=py -%%V"
+    )
+)
 if not defined PY (
     where python >nul 2>nul && set "PY=python"
 )

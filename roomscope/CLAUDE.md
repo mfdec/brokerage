@@ -1,0 +1,63 @@
+# RoomScope: notes for working on this code
+
+Room acoustics analyzer (Dayton iMM-6C, Windows 11 first). Python 3.10+, PySide6 + pyqtgraph, sounddevice, NumPy / SciPy, OpenCV.
+User-facing docs: `README.md`. Roadmap: `docs/PLAN.md`. What is and is not verified: `docs/VERIFICATION.md`.
+
+## Commands
+
+```bash
+pip install -e ".[dev]"                       # PySide6-Essentials is enough; no OpenGL, no PySide6-Addons
+pytest                                        # ~270 tests, a few minutes; Qt runs offscreen (tests/conftest.py)
+pytest tests/test_mapping_ui.py -k walk       # the 30 s virtual-walk test (real-time simulation)
+python scripts/make_screenshots.py            # regenerates docs/screenshots from the simulation
+roomscope --sim                               # run the app against the simulated room
+roomscope-doctor --all                        # audio / camera / software health check
+```
+
+## Layout
+
+* `core/` pure NumPy / SciPy, **no Qt, no devices**: `spectrum`, `weighting`, `meter`, `spectrogram`, `calibration`, `sweep`
+  (ESS + Farina inverse), `decay` (Lundeby, Schroeder, EDT/T20/T30, CSD), `measurement`, `modes`, `roomfield`, `synth`
+  (synthetic room), `geometry` (camera pose / FOV), `multisine`, `fieldmap`, `mapping` (`WalkMapper`).
+* `audio/` `ringbuffer`, `devices` (PortAudio discovery, WASAPI), `engine` (input threads, `SimulatedInput`), `measure`
+  (sweep record, `HardwarePlayer`, `HardwareStimulusPlayer`).
+* `video/` `camera` (OpenCV capture thread, newest frame only), `overlay` (perspective-correct drawing), `tracking`
+  (`ColorMarkerTracker`, `PositionFilter`, `MarkerPipeline`), `sim` (virtual camera + scene).
+* `sim/` `world.SimWorld` (simulated room that renders mic audio, sweeps and the mapping multisine at the mic's position,
+  `LawnmowerPath` walker). `ui/` Qt windows, `ui/tabs/*`, `ui/widgets/*`, `ui/state.AppState` (shared state + `QSettings`).
+* `CameraTab` is extended through hooks, not subclassing: `pre_frame_hooks`, `texture_provider`, `extra_draw`, `extra_box`,
+  `shutdown_hooks`, `output_provider`, `request_pick`, `add_bottom_widget`. `MappingPanel` is built entirely on these.
+
+## Conventions that matter
+
+* **Levels** are RMS dBFS. `power_spectrum` is Parseval-consistent (sum of bins = mean square); a sine of amplitude A reads A²/2.
+  Fractional-octave bands are band *power*; bands narrower than the FFT resolution are scaled by true / used width
+  (right for noise, reads low for tones: use FFT mode with a flat-top window for tones). SPL = dBFS + an explicit user offset.
+  The calibration file's `Sens Factor` is parsed but deliberately **not** applied.
+* **Mic cal** is the mic's deviation from flat: the correction is `measured - cal_dB(f)` (log-frequency interpolation).
+* **Sweeps:** exponential sweep, inverse filter time-reversed with the +6 dB/oct envelope; direct-peak latency is detected;
+  harmonic distortion lands at negative time; the valid IR length per band is `rec_len - latency - L ln(f_hi/f1) fs`.
+* **Camera model:** pose from >= 4 floor pins (`solvePnPGeneric` IPPE + LM refinement). The mic marker is back-projected onto
+  the plane at **mic height** with the full pose; the lens FOV is the key unknown, hence the FOV tools. Pinhole only.
+* **Mapping:** magnitude-only multisine analysis (2-period frames, odd bins = noise), so playback and capture need no sync.
+  Camera and audio timestamps share `time.monotonic()`; `camera_delay_s` shifts positions back for laggy network cameras.
+
+## Gotchas that cost real time
+
+* **The GIL and `QTest.qWait`:** `QTest.qWait` holds the GIL while it waits and starves the audio / worker threads (a 0.1 s job took
+  35 s). Tests use `tests/helpers.spin` / `spin_until` (process events + `time.sleep`). A real `app.exec()` is fine.
+* **PortAudio:** input and output use plain threads with *blocking* `read` / `write` and `latency="high"`; Python callbacks need
+  the GIL, which GUI painting holds for ~10 ms. WASAPI uses `WasapiSettings(auto_convert=True)`.
+* **OpenCV morphology:** even-sized kernels shift masks by one pixel. Use odd, symmetric kernels.
+* **Simulation runs in real time** (`SimulatedInput` paces itself). Keep UI tests short; use `SimulatedInput.pump` or the offline
+  classes in `core/` for long scenarios.
+* **GUI text read-outs** must be time-based (a few Hz), not frame-count based: network cameras can run at 5 fps.
+* `RoomConfig` is a frozen dataclass: use `cfg.with_(...)` and `state.set_room(...)`, which also updates the simulated world.
+* New DSP changes should keep the ground-truth tests green: they are what stands in for hardware. If you change a threshold,
+  say why in the commit and update the numbers in `docs/VERIFICATION.md`.
+
+## Style
+
+Match the surrounding code: type hints with `from __future__ import annotations`, short docstrings that say *why*, comments only
+where the reason is not obvious, no Qt imports under `core/`. Windows launchers in `scripts/` keep CRLF line endings
+(`.gitattributes`).

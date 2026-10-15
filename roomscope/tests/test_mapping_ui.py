@@ -73,7 +73,7 @@ def test_clicking_the_marker_then_tracking_it_in_room_coordinates(win):
     spin(500)
     x, y = mp.track.xy
     assert np.hypot(x - 3.0, y - 2.2) < 0.10
-    assert "Tracking" in mp.track_label.text()
+    assert spin_until(lambda: "Tracking" in mp.track_label.text(), 3)
     # the colour is remembered for this camera and picture size
     raw = win.state.settings.value(ct._calib_key() + "/marker", "", str)
     assert raw and len(raw) > 5
@@ -152,8 +152,15 @@ def test_save_and_load_the_map(win, tmp_path, monkeypatch):
     mp._save()
     mp._clear()
     assert mp.mapper.field.coverage() == 0.0
+    mp._export_csv()
+    assert "Nothing to export" in mp.map_status.text()
     mp._load()
     assert mp.mapper.field.coverage() > 0.0
+    csv_path = str(tmp_path / "m.csv")
+    monkeypatch.setattr(QtWidgets.QFileDialog, "getSaveFileName", staticmethod(lambda *a, **k: (csv_path, "")))
+    mp._export_csv()
+    lines = open(csv_path).read().splitlines()
+    assert lines[0].startswith("x_m,y_m,weight,") and len(lines) > 5 and "Exported" in mp.map_status.text()
 
 
 def test_spot_sweep_pauses_the_map_is_tagged_with_the_position_and_resumes_the_signal(win):
@@ -196,3 +203,61 @@ def test_mapping_refuses_to_start_without_a_marker_colour(win):
     mp = win.mapping
     mp._toggle_mapping()
     assert not mp.mapping and "marker" in mp.map_status.text().lower()
+
+
+def test_mapping_settings_are_remembered_and_the_camera_delay_belongs_to_the_camera(win):
+    from roomscope.ui.main_window import MainWindow
+    from roomscope.ui.state import AppState
+
+    calibrated(win)
+    mp = win.mapping
+    mp.level.setValue(-27.0)
+    mp.fh.setValue(180.0)
+    mp.vmax.setValue(0.6)
+    mp.tilt.setCurrentIndex(1)
+    mp.auto_pin.setChecked(True)
+    mp.delay.setValue(240.0)
+    st2 = AppState(win.state.settings)
+    st2.open_source(SIM_DEVICE, 48000)
+    w2 = MainWindow(st2)
+    w2.show()
+    w2.tabs.setCurrentWidget(w2.camera_tab)
+    try:
+        mp2 = w2.mapping
+        assert mp2.level.value() == -27.0 and mp2.fh.value() == 180.0 and mp2.vmax.value() == pytest.approx(0.6)
+        assert mp2.tilt.currentIndex() == 1 and mp2.auto_pin.isChecked() and not mp2.adapt.isChecked()
+        assert mp2.delay.value() == 0.0                                   # a delay belongs to a camera: restored on connect
+        w2.camera_tab._toggle_connect()
+        assert spin_until(lambda: w2.camera_tab.work_size[0] > 0, 10)
+        assert mp2.delay.value() == 240.0
+    finally:
+        w2.close()
+
+
+def test_live_settings_reach_a_running_mapper_and_out_of_range_frequencies_say_so(win):
+    from roomscope.video.sim import MARKER_BGR
+
+    ct = calibrated(win)
+    mp = win.mapping
+    mp.tracker.set_target_bgr(MARKER_BGR)
+    mp._toggle_stim()
+    mp._toggle_mapping()
+    assert mp.mapping
+    mp.vmax.setValue(0.5)
+    mp.snr.setValue(14.0)
+    mp.delay.setValue(200.0)
+    s = mp.mapper.s
+    assert s.v_max == pytest.approx(0.5) and s.snr_min_db == 14.0 and s.camera_delay_s == pytest.approx(0.2)
+
+    mp.source.setCurrentIndex(1)                                    # the measured map, but nothing was played up here
+    ct.freq.setValue(450.0)
+    tex = mp.texture()
+    assert tex is not None and np.all(tex[..., 3] == 0)
+    assert "covers 20-300 Hz" in ct.overlay_note.text()
+    ct.freq.setValue(100.0)
+    mp.texture()
+    assert "covers" not in ct.overlay_note.text()
+    mp.source.setCurrentIndex(0)
+    assert mp.texture() is None and "Warm" in ct.overlay_note.text()
+    mp._toggle_mapping()
+    mp._toggle_stim()

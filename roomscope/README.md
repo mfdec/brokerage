@@ -92,6 +92,11 @@ volume until the result reports a *signal-to-noise ratio* of 40 dB or more, and 
 
 *Decay tail* controls how long it records after the sweep: use about 1.5 x the expected RT60.
 
+**Export CSV / WAV...** writes the shown measurement to a folder: the impulse response as a float32 WAV (direct sound at the
+index given in the JSON), the frequency response and the RT60 / EDT / T20 / T30 / C50 / C80 table as CSV, and a JSON with the sweep
+settings, calibration, position and S/N. The walk map exports as CSV and as a compressed `.npz` (`np.load`: `w` weights (ny, nx),
+`p` summed power (ny, nx, lines), `freqs`, `dims`, `cell`, `sigma`; level in dB = `10*log10(p/w)`).
+
 ### 3. Room modes
 Enter length/width/height, the speaker and the listening position (0,0,0 = front-left floor corner) and the room's bass
 decay time (button: *take from last measurement*). The tab lists the modes, shows the predicted bass response at the
@@ -108,8 +113,9 @@ wave at the chosen frequency appears on the picture (warm = louder than the room
 *Snap to nearest mode* jumps to a resonance. The map is drawn at ear height by default; set *Map height* to 0 for the floor.
 
 ### 5. Walk-the-room mapping
-1. Fix a **bright, matte, saturated ball or sticker** to the mic stand or the mic itself, a colour nothing else in
-   the view has (hot pink, lime green and orange work well; avoid glossy surfaces and anything near the skin tone).
+1. Fix a **bright, matte, saturated ball or sticker** (at least 5-8 cm across: a ball, or a paper disc taped to a stand) to the mic
+   stand or the mic itself, in a colour nothing else in the view has (hot pink, lime green and orange work well; avoid glossy
+   surfaces and anything near the skin tone).
 2. **Pick marker colour**, then click the marker in the picture. It is remembered for this camera.
 3. Press **Play mapping signal** (a 20-300 Hz multisine; the level setting is its peak digital level). Raise the amplifier
    until the status line says the signal-to-noise ratio is good (10 dB or more).
@@ -121,7 +127,8 @@ wave at the chosen frequency appears on the picture (warm = louder than the room
 6. **Measure sweep here:** stand still at a spot and press it (or tick the automatic option, which fires after 4 s of
    standing still). The mapping signal pauses, a decay sweep runs, the result is added to the *Measure* tab tagged with its
    position, pinned on the picture with its RT60, and the mapping signal resumes.
-7. **Save / Load** keeps a map for later; **Clear map** starts over.
+7. **Save / Load** keeps a map for later, **CSV** exports it as a table (one row per cell: `x_m`, `y_m`, `weight`, then the level in dB of every
+   2 Hz line, ready for pandas or a spreadsheet), **Clear map** starts over. Your mapping settings and each camera's marker colour and delay are remembered.
 
 ![Walk mapping in progress](docs/screenshots/08_walk_mapping_in_progress.png)
 

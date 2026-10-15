@@ -94,6 +94,21 @@ class FieldMap:
         return float(np.mean(self.w >= min_weight))
 
     # ------------------------------------------------------------------ persistence
+    def export_csv(self, path: str, min_weight: float = 0.25) -> int:
+        """Tidy table for spreadsheets / pandas: one row per mapped cell (``x_m``, ``y_m``, ``weight``), then the level of
+        every stimulus line in dB (relative to full scale, before any mic correction).  Returns the number of rows."""
+        import csv  # noqa: PLC0415
+
+        with np.errstate(divide="ignore", invalid="ignore"):
+            db = 10.0 * np.log10(np.maximum(self.p.astype(np.float64) / np.maximum(self.w, 1e-12)[..., None], 1e-30))
+        cells = np.argwhere(self.w >= min_weight)
+        with open(path, "w", newline="") as fh:
+            wr = csv.writer(fh)
+            wr.writerow(["x_m", "y_m", "weight"] + [f"{f:g}Hz_dB" for f in self.freqs])
+            for iy, ix in cells:
+                wr.writerow([f"{self.xs[ix]:.3f}", f"{self.ys[iy]:.3f}", f"{self.w[iy, ix]:.2f}"] + [f"{v:.2f}" for v in db[iy, ix]])
+        return len(cells)
+
     def save(self, path: str) -> None:
         np.savez_compressed(path, w=self.w, p=self.p, freqs=self.freqs, dims=self.dims.as_array(),
                             cell=self.cell, sigma=self.sigma)

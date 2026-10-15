@@ -10,6 +10,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from roomscope.audio.devices import SIM_DEVICE, DeviceInfo, list_output_devices
 from roomscope.audio.engine import AudioError
 from roomscope.audio.measure import CHANNEL_MODES, HardwarePlayer, MeasurementCancelled, record_sweep
+from roomscope.core.export import export_measurement
 from roomscope.core.measurement import MeasurementError, MeasurementResult, analyze_recording, frequency_response
 from roomscope.core.sweep import SweepSpec
 from roomscope.core.units import format_freq
@@ -162,6 +163,10 @@ class MeasureTab(QtWidgets.QWidget):
         hf.addWidget(self.history)
         clear = QtWidgets.QPushButton("Clear all")
         clear.clicked.connect(self.state.clear_measurements)
+        export = QtWidgets.QPushButton("Export CSV / WAV...")
+        export.setToolTip("Write the shown measurement to a folder: impulse response (WAV), frequency response and RT60 table (CSV), details (JSON).")
+        export.clicked.connect(self._export)
+        hf.addWidget(export)
         hf.addWidget(clear)
         v.addWidget(hist)
 
@@ -366,6 +371,20 @@ class MeasureTab(QtWidgets.QWidget):
         self.cancel_btn.setEnabled(False)
         self.worker = None
         self._refresh_enabled()
+
+    def _export(self) -> None:
+        res = self.result
+        if res is None:
+            self.status.setText("Nothing to export yet: run a measurement first.")
+            return
+        folder = QtWidgets.QFileDialog.getExistingDirectory(self, "Export the shown measurement to this folder")
+        if not folder:
+            return
+        cal = self.state.calibration
+        fr = frequency_response(res.ir, res.spec, cal if cal is not None else res.calibration,
+                                window_s=float(self.rs_win.currentData()), smoothing_oct=float(self.rs_smooth.currentData()))
+        files = export_measurement(res, folder, fr)
+        self.status.setText(f"Exported {len(files)} files to {folder}")
 
     def wait_idle(self, timeout_ms: int = 60000) -> None:
         """Block until a running measurement finishes (used by tests / scripted runs)."""

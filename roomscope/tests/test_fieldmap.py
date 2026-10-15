@@ -70,3 +70,19 @@ def test_nan_lines_are_skipped_and_save_load_roundtrips(tmp_path):
     assert np.allclose(back.w, fm.w) and np.allclose(back.p, fm.p) and back.dims == fm.dims and np.allclose(back.freqs, F)
     fm.clear()
     assert fm.w.sum() == 0 and fm.stats.n_added == 0
+
+
+def test_csv_export_is_a_tidy_table(tmp_path):
+    import csv
+
+    fm = FieldMap(RoomDims(5.0, 4.0, 2.5), np.array([30.0, 32.0, 34.0]), cell=0.5, sigma=0.5)
+    fm.add(2.0, 1.5, np.array([1e-4, 1e-3, 1e-2]), 2.0)
+    path = tmp_path / "map.csv"
+    n = fm.export_csv(str(path))
+    rows = list(csv.reader(open(path)))
+    assert rows[0] == ["x_m", "y_m", "weight", "30Hz_dB", "32Hz_dB", "34Hz_dB"]
+    assert len(rows) - 1 == n > 4
+    for r in rows[1:]:                                              # a single measurement: every touched cell reads its level
+        assert [float(v) for v in r[3:]] == pytest.approx([-40.0, -30.0, -20.0], abs=0.01)
+        assert 0.0 < float(r[0]) < 5.0 and 0.0 < float(r[1]) < 4.0
+    assert FieldMap(RoomDims(5.0, 4.0, 2.5), np.array([30.0])).export_csv(str(tmp_path / "empty.csv")) == 0

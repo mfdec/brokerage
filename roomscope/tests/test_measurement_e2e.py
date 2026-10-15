@@ -121,3 +121,30 @@ def test_cancel_stops_playback_and_raises():
         assert not world.playing                                   # player was stopped
     finally:
         src.stop()
+
+
+@pytest.mark.parametrize("fs_play", [47995, 48005, 48048])     # speaker card 100 / -100 / 1000 ppm away from the mic card
+def test_clock_mismatch_between_speaker_and_mic_cards_leaves_decay_times_unchanged(fs_play):
+    from roomscope.core.modes import RoomDims
+    from roomscope.core.synth import SyntheticRoom, T60Profile
+
+    room = SyntheticRoom(RoomDims(5.0, 4.0, 2.5), (0.4, 1.3, 1.1), T60Profile(0.5))
+    h = room.ir((3.5, 2.0, 1.2), FS, 2.5)
+    spec = SweepSpec(fs=FS, duration=4.0, tail_s=1.6, level_dbfs=-15)
+    n = recording_length(spec)
+
+    def record(played_at):
+        sig = sweep_signal(SweepSpec(fs=played_at, duration=4.0, tail_s=1.6, level_dbfs=-15)).astype(np.float64)
+        y = fftconvolve(sig, h)
+        rec = np.zeros(n)
+        m = min(y.size, n - 5000)
+        rec[5000:5000 + m] = y[:m]
+        return rec + 10 ** (-95 / 20) * np.random.default_rng(3).standard_normal(n)
+
+    ref = analyze_recording(record(FS), spec)
+    off = analyze_recording(record(fs_play), spec)
+    assert off.decay.t_mid() == pytest.approx(ref.decay.t_mid(), rel=0.03)
+    for a, b in zip(ref.decay.bands, off.decay.bands):
+        if 250 <= a.fc <= 4000:
+            assert b.t60 == pytest.approx(a.t60, rel=0.05), (a.fc, a.t60, b.t60)
+    assert off.snr_db > 40

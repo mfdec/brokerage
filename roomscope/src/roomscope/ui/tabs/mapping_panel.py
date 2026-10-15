@@ -48,8 +48,9 @@ class MappingPanel(QtCore.QObject):
         self._cursor = 0
         self._tex_key = None
         self._tex = None
-        self._frames = 0
+        self._last_label_t = 0.0
         self._last_pin_t = 0.0
+        self._note_shown = None
         self._swept = False                 # a spot sweep ran: the mapper's audio clock must restart
         self._resume_stim = False
         self.track = self.pipe.state
@@ -58,7 +59,7 @@ class MappingPanel(QtCore.QObject):
         tab.texture_provider = self.texture
         tab.extra_draw.append(self.draw)
         tab.modelChanged.connect(lambda: self.pipe.set_camera(tab.cam_model))
-        tab.pictureSizeKnown.connect(self.load_marker)
+        tab.pictureSizeKnown.connect(self.load_camera_settings)
         tab.shutdown_hooks.append(self.shutdown)
         self.state.roomChanged.connect(self._room_changed)
         self.state.sourceChanged.connect(self._source_changed)
@@ -123,7 +124,10 @@ class MappingPanel(QtCore.QObject):
         save.clicked.connect(self._save)
         load = QtWidgets.QPushButton("Load...")
         load.clicked.connect(self._load)
-        for b in (clear, save, load):
+        export = QtWidgets.QPushButton("CSV...")
+        export.setToolTip("Export the measured map as a table (one row per cell, one column per frequency line).")
+        export.clicked.connect(self._export_csv)
+        for b in (clear, save, load, export):
             row.addWidget(b)
         f.addRow("Max walking speed", self.vmax)
         f.addRow("Min signal-to-noise", self.snr)
@@ -154,6 +158,53 @@ class MappingPanel(QtCore.QObject):
         self.demo_btn.clicked.connect(self._demo_walk)
         f.addRow(self.demo_btn)
         self.tab.extra_box.addWidget(box)
+        self._restore_settings()
+        for name in self._PERSIST_SPINS:
+            getattr(self, name).valueChanged.connect(self._save_settings)
+        for sig in (self.tilt.currentIndexChanged, self.adapt.toggled, self.auto_pin.toggled):
+            sig.connect(self._save_settings)
+        self.delay.valueChanged.connect(self._save_delay)
+        for w in (self.vmax, self.snr, self.delay):
+            w.valueChanged.connect(self._apply_live_settings)
+
+    # ================================================================== settings
+    _PERSIST_SPINS = ("level", "fl", "fh", "vmax", "snr", "bw", "tol")
+
+    def _restore_settings(self) -> None:
+        st = self.state.settings
+        for name in self._PERSIST_SPINS:
+            try:
+                raw = st.value(f"mapping/{name}", None)
+                if raw not in (None, ""):
+                    getattr(self, name).setValue(float(raw))
+            except (TypeError, ValueError):
+                pass
+        try:
+            raw = st.value("mapping/tilt", None)
+            if raw not in (None, ""):
+                self.tilt.setCurrentIndex(int(raw))
+        except (TypeError, ValueError):
+            pass
+        for key, box in (("adapt", self.adapt), ("auto_pin", self.auto_pin)):
+            box.setChecked(str(st.value(f"mapping/{key}", "")).lower() in ("1", "true"))
+
+    def _save_settings(self, *_args) -> None:
+        st = self.state.settings
+        for name in self._PERSIST_SPINS:
+            st.setValue(f"mapping/{name}", float(getattr(self, name).value()))
+        st.setValue("mapping/tilt", int(self.tilt.currentIndex()))
+        st.setValue("mapping/adapt", bool(self.adapt.isChecked()))
+        st.setValue("mapping/auto_pin", bool(self.auto_pin.isChecked()))
+
+    def _apply_live_settings(self, *_args) -> None:
+        """Walking-speed gate, S/N gate and camera delay take effect at once, also in the middle of a walk."""
+        if self.mapper is not None:
+            m = self.mapper.s
+            m.v_max, m.snr_min_db, m.camera_delay_s = self.vmax.value(), self.snr.value(), self.delay.value() / 1000.0
+
+    def _save_delay(self, *_args) -> None:
+        if self.tab.camera is not None and self.tab.work_size[0]:           # the camera delay belongs to a camera
+            self.state.settings.setValue(self.tab._calib_key() + "/delay_ms", float(self.delay.value()))
 
     # ================================================================== marker
     def _pick_marker(self) -> None:
@@ -184,6 +235,16 @@ class MappingPanel(QtCore.QObject):
                 self.tracker.target = np.array(json.loads(raw), dtype=float)
             except (ValueError, TypeError):
                 pass
+
+    def load_camera_settings(self) -> None:
+        """Called when a camera's first picture arrives: restore this camera's marker colour and delay."""
+        self.load_marker()
+        raw = self.state.settings.value(self.tab._calib_key() + "/delay_ms", None)
+        try:
+            if raw not in (None, ""):
+                self.delay.setValue(float(raw))
+        except (TypeError, ValueError):
+            pass
 
     # ================================================================== stimulus
     def _spec(self) -> MultisineSpec:
@@ -275,6 +336,15 @@ class MappingPanel(QtCore.QObject):
         if path:
             self.mapper.field.save(path)
 
+    def _export_csv(self) -> None:
+        if self.mapper is None or self.mapper.field.coverage(0.25) == 0.0:
+            self.map_status.setText("Nothing to export yet: map some of the room first.")
+            return
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(self.tab, "Export walk map", "roomscope-map.csv", "CSV (*.csv)")
+        if path:
+            n = self.mapper.field.export_csv(path)
+            self.map_status.setText(f"Exported {n} map cells to {path}")
+
     def _load(self) -> None:
         path, _ = QtWidgets.QFileDialog.getOpenFileName(self.tab, "Load walk map", "", "RoomScope map (*.npz)")
         if not path:
@@ -290,7 +360,6 @@ class MappingPanel(QtCore.QObject):
             return
         st = self.pipe.process(img, fr.t)
         self.track = st
-        self._frames += 1
         if self.mapping and self.mapper is not None:
             self.mapper.feed_position(fr.t, st.xy, st.valid)
             src = self.state.source
@@ -307,13 +376,21 @@ class MappingPanel(QtCore.QObject):
                     self.mapper.reset_audio_clock()
                 if new.size:
                     self.mapper.feed_audio(new, time.monotonic())
-            if self._frames % 6 == 0:
+            if self._label_due():
                 self._update_status()
             if self.auto_pin.isChecked() and not self._sweep_running() and self.mapper.stationary_for(4.0) \
                     and time.monotonic() - self._last_pin_t > 30.0:
                 self._sweep_here()
-        elif self._frames % 10 == 0:
+        elif self._label_due():
             self._update_track_label()
+
+    def _label_due(self, every_s: float = 0.25) -> bool:
+        """Refresh the text read-outs a few times a second whatever the camera's frame rate."""
+        now = time.monotonic()
+        if now - self._last_label_t < every_s:
+            return False
+        self._last_label_t = now
+        return True
 
     def _update_track_label(self) -> None:
         st = self.track
@@ -352,16 +429,43 @@ class MappingPanel(QtCore.QObject):
         _, _, db = modal_field_db(cfg, self.tab.freq.value(), self.tab.plane.value(), n=(nx, ny))
         return db
 
+    def _in_signal_range(self) -> bool:
+        lines = self.mapper.field.freqs
+        return bool(lines[0] - self.bw.value() <= self.tab.freq.value() <= lines[-1] + self.bw.value())
+
     def _measured_rel(self) -> np.ndarray | None:
         if self.mapper is None:
             return None
+        fm = self.mapper.field
+        if not self._in_signal_range():                           # never show the nearest edge line as if it were this frequency
+            return np.full((fm.ny, fm.nx), np.nan)
         f, bw = self.tab.freq.value(), self.bw.value()
-        return self.mapper.field.relative_db(f - bw, f + bw)
+        return fm.relative_db(f - bw, f + bw)
+
+    _NOTE_DEFAULT = "Warm = louder than the room average at this frequency, cool = quieter (standing-wave pattern)."
+
+    def _note(self, text: str | None) -> None:
+        text = text or self._NOTE_DEFAULT
+        if text != self._note_shown:
+            self._note_shown = text
+            self.tab.overlay_note.setText(text)
 
     def texture(self):
         mode = self.source.currentIndex()
-        if mode == 0 or self.mapper is None:
+        if mode == 0:
+            self._note(None)
             return None
+        if self.mapper is None:
+            self._note("Nothing mapped yet: play the mapping signal, start mapping and walk the room.")
+            return None
+        if not self._in_signal_range():
+            lines = self.mapper.field.freqs
+            self._note(f"No measured data at {self.tab.freq.value():.0f} Hz: the mapping signal covers "
+                       f"{lines[0]:.0f}-{lines[-1]:.0f} Hz.")
+        else:
+            self._note("Measured: warm = louder than the mapped-area average at this frequency, cool = quieter."
+                       if mode == 1 else
+                       "Measured minus model: warm = the room is louder here than the model predicts, cool = quieter.")
         key = (mode, round(self.tab.freq.value(), 2), self.bw.value(), self.tab.contrast.currentData(),
                self.mapper.field.stats.n_added, round(self.tab.plane.value(), 3))
         if key == self._tex_key and self._tex is not None:
