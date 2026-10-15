@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "roomscope"
+dynamic = ["version"]
+description = "Room acoustics analyzer: live RTA/waterfall, sweep-based room decay (RT60), room modes, and camera-based walk-the-room sound-field mapping."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "numpy>=1.26",
+    "scipy>=1.11",
+    "opencv-python-headless>=4.8",
+    "PySide6-Essentials>=6.6",
+    "pyqtgraph>=0.13.3",
+    "sounddevice>=0.4.6",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+# Friendly camera names in the picker on Windows (DirectShow device names). Optional.
+camnames = ["pygrabber>=0.2; sys_platform == 'win32'"]
+
+[project.scripts]
+roomscope-doctor = "roomscope.diagnostics:main"
+
+[project.gui-scripts]
+roomscope = "roomscope.app:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "roomscope.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+filterwarnings = ["ignore::DeprecationWarning"]
