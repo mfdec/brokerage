@@ -32,6 +32,15 @@ distractor objects) with a known pose and lens; a virtual person walks the marke
 Everything above is in `tests/` (`pytest`). `scripts/make_screenshots.py` regenerates the pictures in the README from the
 same simulation.
 
+### The packaged Windows program
+
+`RoomScope-<version>-win64.zip` is built with PyInstaller (`packaging/roomscope.spec`) from a pinned set of libraries
+(`packaging/requirements-windows.txt`; the full test suite is run with exactly that set). It was built **under Wine on Linux**
+(`packaging/build_exe_wine.sh`), and the built `RoomScope.exe --selftest` (libraries, DSP, live analyzer, sweep + decay, export,
+camera overlay, walk-the-room mapping, screenshot) was run **under Wine**. That shows the bundle is complete (no missing DLLs,
+data files or hidden imports) but it is *not* a Windows run: real Windows, the real audio stack and real cameras are still on the
+checklist below. Windows SmartScreen will warn about the unsigned exe.
+
 ### Known limits of the simulation
 
 * The synthetic room is rectangular and empty. Real rooms have furniture, non-rigid walls, bass traps, doors; their modes
@@ -48,6 +57,7 @@ Tick these off on a Windows 11 machine. `roomscope-doctor --all` covers the firs
 
 **Software and audio**
 - [ ] `scripts\setup.bat` completes; `scripts\run.bat` opens the window with the dark theme at your display scaling
+- [ ] The packaged `RoomScope.exe` starts on a clean Windows 11 (no Python), `RoomScope.exe --selftest` reports ALL CHECKS PASSED
 - [ ] `roomscope-doctor --all` lists the iMM-6C, reports a sensible noise floor (quiet room: roughly -80 … -60 dBFS), no dropouts, sample rate within 1 %
 - [ ] The mic opens at 44.1 and 48 kHz (WASAPI shared mode with auto-convert); *Rescan* finds a mic plugged in later
 - [ ] Windows *Audio enhancements* off and a fixed input level: levels no longer drift when you clap / play music

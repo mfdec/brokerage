@@ -33,6 +33,7 @@ Nothing below needs new features, only contact with reality. The checklist is in
 
 ## v1.0 candidates (polish)
 
+* **Distribution:** an installer (Inno Setup / MSIX) and code signing, so SmartScreen stops warning; a GitHub release per tag built on a Windows runner.
 * **Sessions:** save / load everything (room, positions, calibration, measurements, maps) in one file; autosave on exit.
 * **Exports:** CSV / WAV for a measurement and CSV / NPZ for a walk map already ship (v0.6); still to do: PNG of every plot and of the
   camera overlay, and one-click export of everything in a session.

@@ -12,11 +12,14 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"                 # the roomscope/ folder
 WORK="${WORK:-${TMPDIR:-/tmp}/roomscope-winbuild}"
 PYVER="${PYVER:-3.12.10}"
+PYMM="${PYVER%.*}"                                                    # 3.12
+ABI="cp${PYMM//./}"                                                   # cp312
 WINE="${WINE:-/usr/lib/wine/wine64}"
 export WINEPREFIX="$WORK/prefix" WINEDEBUG="-all" WINEDLLOVERRIDES="mscoree,mshtml="
 mkdir -p "$WORK/dl" "$WORK/wheels"
 winpath() { echo "Z:${1//\//\\}"; }
-run() { xvfb-run -a "$WINE" "$@"; }
+# Wine's Python cannot use a plain file as stdout (WinError 6 at start-up), so its output always goes through a pipe.
+run() { xvfb-run -a "$WINE" "$@" 2>&1 | cat; }
 PY="$WORK/py/tools/python.exe"
 VERSION="$(sed -n 's/^__version__ = "\(.*\)"/\1/p' "$HERE/src/roomscope/__init__.py")"
 
@@ -27,10 +30,10 @@ if [ ! -f "$PY" ]; then
 fi
 
 echo "== Windows wheels"
-python3 -m pip download -q -d "$WORK/wheels" --platform win_amd64 --python-version "${PYVER%.*}" --implementation cp \
-    --abi "cp${PYVER%.*}" --only-binary=:all: -r "$HERE/packaging/requirements-windows.txt"
-python3 -m pip download -q -d "$WORK/wheels" --platform win_amd64 --python-version "${PYVER%.*}" --implementation cp \
-    --abi "cp${PYVER%.*}" --only-binary=:all: pefile pywin32-ctypes      # Windows-only dependencies that pip skips on Linux
+python3 -m pip download -q -d "$WORK/wheels" --platform win_amd64 --python-version "$PYMM" --implementation cp \
+    --abi "$ABI" --only-binary=:all: -r "$HERE/packaging/requirements-windows.txt"
+python3 -m pip download -q -d "$WORK/wheels" --platform win_amd64 --python-version "$PYMM" --implementation cp \
+    --abi "$ABI" --only-binary=:all: pefile pywin32-ctypes              # Windows-only dependencies that pip skips on Linux
 
 echo "== Wine prefix and packages"
 run wineboot --init >/dev/null 2>&1 || true

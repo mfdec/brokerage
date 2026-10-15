@@ -10,6 +10,7 @@ The program has no console; run it with --selftest or --doctor from a terminal t
 import os
 import sys
 
+from PyInstaller.config import CONF
 from PyInstaller.utils.hooks import collect_data_files
 from PyInstaller.utils.win32.versioninfo import (
     FixedFileInfo, StringFileInfo, StringStruct, StringTable, VarFileInfo, VarStruct, VSVersionInfo,
@@ -36,8 +37,8 @@ version_info = VSVersionInfo(
         VarFileInfo([VarStruct("Translation", [1033, 1200])]),
     ],
 )
-os.makedirs(WORKPATH, exist_ok=True)
-version_file = os.path.join(WORKPATH, "version_info.txt")
+os.makedirs(CONF["workpath"], exist_ok=True)
+version_file = os.path.join(CONF["workpath"], "version_info.txt")
 with open(version_file, "w", encoding="utf-8") as fh:
     fh.write(str(version_info))
 

@@ -26,6 +26,21 @@ microphone. It does the things you actually need when treating a room, in one wi
 
 ## Install (Windows 11)
 
+### Easiest: the packaged program (no Python needed)
+
+Download **`RoomScope-0.6.0-win64.zip`**, unzip the *whole folder* anywhere (for example `C:\RoomScope`) and double-click
+**`RoomScope.exe`**. The exe is not code-signed, so Windows SmartScreen may say *"Windows protected your PC"*: click
+*More info → Run anyway*. Keep the `_internal` folder next to the exe.
+
+Two built-in checks run from a Command Prompt / PowerShell opened in that folder:
+`RoomScope.exe --selftest` (about 20 s; exercises the program end to end with simulated hardware and writes a report and a
+screenshot) and `RoomScope.exe --doctor --all` (audio devices, mic noise floor, cameras).
+
+*Build it yourself:* on Windows run `scripts\setup.bat` then `scripts\build_exe.bat` (PyInstaller; result in `dist\RoomScope`).
+On Linux, `packaging/build_exe_wine.sh` builds the same program under Wine.
+
+### Or run from source
+
 1. Install **Python 3.11 or 3.12** (64-bit) from <https://www.python.org/downloads/windows/>; tick *"Add python.exe to PATH"*.
 2. Get this folder onto your PC (clone the repository or download the ZIP) and double-click **`scripts\setup.bat`**.
    It creates a private `.venv` and installs everything (NumPy, SciPy, OpenCV, Qt, pyqtgraph, sounddevice).
