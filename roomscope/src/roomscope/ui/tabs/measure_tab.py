@@ -68,6 +68,7 @@ class MeasureTab(QtWidgets.QWidget):
         self.result: MeasurementResult | None = None
         self.worker: MeasureWorker | None = None
         self._outputs: list[DeviceInfo] = []
+        self._closing = False
 
         root = QtWidgets.QHBoxLayout(self)
         root.setContentsMargins(6, 6, 6, 6)
@@ -361,10 +362,18 @@ class MeasureTab(QtWidgets.QWidget):
         self.state.add_measurement(result)
         self.status.setText("Done.")
 
+    def shutdown(self) -> None:
+        """Stop a running measurement and wait for its thread (the window is closing)."""
+        self._closing = True
+        w = self.worker
+        if w is not None and w.isRunning():
+            w.cancel()
+            w.wait(8000)
+
     def _on_failed(self, msg: str) -> None:
         self.status.setText(msg)
         self.progress.setValue(0)
-        if "cancelled" not in msg.lower():
+        if "cancelled" not in msg.lower() and not self._closing:
             QtWidgets.QMessageBox.warning(self, "Measurement failed", msg)
 
     def _worker_finished(self) -> None:

@@ -1,0 +1,18 @@
+# Exact versions used for the published Windows build (the set the test suite was run with), plus the build tools.
+numpy==2.5.4
+scipy==1.18.1
+opencv-python-headless==5.0.0.93
+PySide6-Essentials==6.12.0
+shiboken6==6.12.0
+pyqtgraph==0.14.0
+sounddevice==0.5.6
+pygrabber==0.2
+comtypes
+pyinstaller==6.22.3
+pyinstaller-hooks-contrib
+pefile
+pywin32-ctypes
+altgraph
+packaging
+setuptools
+wheel

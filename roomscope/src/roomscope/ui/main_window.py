@@ -66,6 +66,7 @@ class MainWindow(QtWidgets.QMainWindow):
         )
 
     def closeEvent(self, ev) -> None:
+        self.measure.shutdown()
         self.camera_tab.shutdown()
         self.state.close_source()
         super().closeEvent(ev)

@@ -159,3 +159,17 @@ def test_modes_tab_follows_room_edits_and_drives_the_simulated_room(window):
     again = AppState(st.settings)
     assert again.room.dims.lx == 6.0
     st.close_source()
+
+
+def test_closing_the_window_during_a_measurement_cancels_it_cleanly(window):
+    window.state.open_source(SIM_DEVICE, 48000)
+    spin(600)
+    mt = window.measure
+    mt.dur.setCurrentIndex(0)
+    assert mt._start()
+    worker = mt.worker
+    spin(400)
+    assert worker.isRunning()
+    window.close()                                                # must not hang, pop a dialog or leave the thread running
+    assert not worker.isRunning()
+    assert window.state.source is None
