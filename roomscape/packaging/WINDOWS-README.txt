@@ -23,5 +23,5 @@ IF SOMETHING DOES NOT WORK
       RoomScape.exe --selftest            (checks the program itself with simulated hardware, ~20 s)
   and send the output.
 
-This version (0.6) has been tested against a simulated room, camera and walker only; it has not yet been run with a
-real microphone or camera. See docs\VERIFICATION.md in the source repository for the checklist.
+This version (0.7) has been tested against a simulated room, camera and walker (and its self-test passed on a Windows
+build machine); it has not yet been run with a real microphone or camera. See docs\VERIFICATION.md in the source repository for the checklist.

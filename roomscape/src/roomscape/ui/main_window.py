@@ -6,6 +6,7 @@ from PySide6 import QtCore, QtWidgets
 
 from roomscape import __version__
 from roomscape.ui.state import AppState
+from roomscape.ui.tabs.ai_panel import AiPanel
 from roomscape.ui.tabs.camera_tab import CameraTab
 from roomscape.ui.tabs.live_tab import LiveTab
 from roomscape.ui.tabs.decay_panel import DecayPanel
@@ -44,6 +45,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.camera_tab.output_provider = lambda: (self.measure.out_dev.currentData(), self.measure.out_ch.currentText())
         self.mapping = MappingPanel(self.camera_tab)
         self.decay = DecayPanel(self.camera_tab, self.mapping)
+        self.ai = AiPanel(self.camera_tab, self.decay)
         self.tabs.addTab(self.camera_tab, "Camera map")
 
         self.status_left = QtWidgets.QLabel("Ready")

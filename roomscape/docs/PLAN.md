@@ -17,10 +17,11 @@ or an IP camera.
 | **v0.4** | Room-mode calculator (axial / tangential / oblique), predicted bass response, matching against measured peaks, standing-wave field viewer | done |
 | **v0.5** | Camera overlay: webcam / DroidCam / IP camera, pin floor points, pose + FOV tools, modelled sound field drawn on the live picture | done |
 | **v0.6** | **Walk-the-room mapping**: coloured marker tracked by the camera, multisine mapping signal, measured field painted on the picture and plan views, model-vs-measured difference, spot decay sweeps pinned on the picture, `roomscape-doctor`, Windows launchers | **done (simulation-verified)** |
-| v0.7 | Real-hardware hardening (see below), whatever the first Windows 11 run turns up | next |
+| **v0.7** | **Decay camera** (repeating bass-sweep bursts while walking: EDT / T20 maps and an animated energy-left overlay), **0 Hz frequency axes**, optional **AI analyst** (Claude API key: interpretation, tool lookups, pins on the picture), Windows exe built and self-tested on a Windows runner | **done (simulation-verified)** |
+| v0.8 | Real-hardware hardening (see below), whatever the first Windows 11 run turns up | next |
 | v1.0 | Polish: sessions, exports, REW alignment (see below) | planned |
 
-## Next: v0.7 hardware hardening
+## Next: v0.8 hardware hardening
 
 Nothing below needs new features, only contact with reality. The checklist is in [VERIFICATION.md](VERIFICATION.md).
 
@@ -41,12 +42,22 @@ Nothing below needs new features, only contact with reality. The checklist is in
   can be compared one to one; optionally import REW impulse-response WAVs.
 * **Lens distortion:** a barrel/pincushion slider (cheap webcams, wide-angle phone modes) applied before pinning and tracking.
   The pose model today is a pure pinhole camera.
-* **Decay map:** interpolate RT60 pins into a plan view once several spot sweeps exist.
+* **Decay map:** the burst-based decay camera exists (v0.7); still open: several bands at once, a 3D view over the room, and
+  feeding the stand-still sweep results into the same map as a cross-check.
+* **AI analyst:** more tools (compare two saved maps, suggest trap placement and re-simulate it with the modal model), streaming
+  output, and a local summary cache so repeated questions do not re-send the data.
 * **Multi-speaker / sub-pair modelling** in the modal model (the model has one source today).
 * **Mapping above ~130 Hz:** a slower, denser walk or a stationary-grid mode with longer frames.
 * **Mic stand height tracking:** estimate marker height from two views, or a tall-marker mode, instead of the fixed ear height.
 
 ## Decisions worth remembering
+
+* **Decay camera = repeated bursts, not the multisine.** Decay needs an impulse response, which a steady multisine cannot give;
+  a 0.5 s bass sweep every 1.6 s gives one real decay measurement per ~0.5 m of slow walking and keeps the same marker tracking.
+  The cost is walking speed (about 0.3 m/s instead of 0.5) and a lower spatial density than the level map.
+* **AI = interpretation layer, physics = numbers.** The model never produces measurements; it gets the app's own numbers, can look
+  up more through tools, and its report is labelled an estimate. The key lives in the Credential Manager, nothing is sent before
+  the user presses Analyse, and a preview shows the payload.
 
 * **Why a multisine for mapping, and sweeps for decay?** The sweep gives the impulse response (needed for decay) but takes
   seconds per position. A periodic multisine has a *fixed* spectrum, so each 1 s frame while walking yields the level of 100+

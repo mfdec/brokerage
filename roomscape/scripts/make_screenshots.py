@@ -119,6 +119,23 @@ def main() -> int:
 
     mp._toggle_mapping()
     mp._toggle_stim()
+
+    # ---- Decay camera (virtual slow walk, ~50 s) and the AI panel (no key, so nothing is faked)
+    dp = win.decay
+    ct.freq.setValue(63.0)
+    dp._demo_walk()
+    dp._toggle()
+    spin_until(lambda: world.time_s > world.walker.duration + 2.5, 120)
+    dp.source.setCurrentIndex(1)
+    spin(700)
+    shot("12_decay_camera_edt.png")
+    dp.time_slider.setValue(45)                                  # also switches the overlay to the energy-left animation
+    spin(700)
+    shot("13_decay_camera_energy_left.png")
+    dp._toggle()
+    sc.verticalScrollBar().setValue(sc.verticalScrollBar().maximum())
+    spin(300)
+    shot("14_decay_and_ai_controls.png")
     ct.shutdown()
     st.close_source()
     return 0

@@ -96,7 +96,7 @@ class CameraTab(QtWidgets.QWidget):
         root.setContentsMargins(6, 6, 6, 6)
         scroll = QtWidgets.QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setFixedWidth(372)
+        scroll.setFixedWidth(440)
         scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
         scroll.setWidget(self._build_controls())
         root.addWidget(scroll, 0)

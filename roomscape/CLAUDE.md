@@ -7,7 +7,7 @@ User-facing docs: `README.md`. Roadmap: `docs/PLAN.md`. What is and is not verif
 
 ```bash
 pip install -e ".[dev]"                       # PySide6-Essentials is enough; no OpenGL, no PySide6-Addons
-pytest                                        # ~270 tests, a few minutes; Qt runs offscreen (tests/conftest.py)
+pytest                                        # ~320 tests, a few minutes; Qt runs offscreen (tests/conftest.py)
 pytest tests/test_mapping_ui.py -k walk       # the 30 s virtual-walk test (real-time simulation)
 python scripts/make_screenshots.py            # regenerates docs/screenshots from the simulation
 roomscape --sim                               # run the app against the simulated room
@@ -28,7 +28,11 @@ roomscape-doctor --all                        # audio / camera / software health
 
 * `core/` pure NumPy / SciPy, **no Qt, no devices**: `spectrum`, `weighting`, `meter`, `spectrogram`, `calibration`, `sweep`
   (ESS + Farina inverse), `decay` (Lundeby, Schroeder, EDT/T20/T30, CSD), `measurement`, `modes`, `roomfield`, `synth`
-  (synthetic room), `geometry` (camera pose / FOV), `multisine`, `fieldmap`, `mapping` (`WalkMapper`).
+  (synthetic room), `geometry` (camera pose / FOV), `multisine`, `fieldmap`, `mapping` (`WalkMapper`), `decaymap` (`DecayWalkMapper`:
+  periodic sweep bursts -> per-burst IR at 1 kHz -> band EDT/T20 + energy-left curves -> `DecayFields`).
+* `ai/` optional Claude analyst, no Qt: `client` (stdlib Messages-API client, injectable transport, tool loop), `analyst` (evidence JSON,
+  tool box, system prompt, report parser), `keystore` (Windows Credential Manager via ctypes; never QSettings). Tests use a scripted
+  fake server (`tests/test_ai.py`): the real API has not been called from the build sandbox.
 * `audio/` `ringbuffer`, `devices` (PortAudio discovery, WASAPI), `engine` (input threads, `SimulatedInput`), `measure`
   (sweep record, `HardwarePlayer`, `HardwareStimulusPlayer`).
 * `video/` `camera` (OpenCV capture thread, newest frame only), `overlay` (perspective-correct drawing), `tracking`
@@ -36,7 +40,8 @@ roomscape-doctor --all                        # audio / camera / software health
 * `sim/` `world.SimWorld` (simulated room that renders mic audio, sweeps and the mapping multisine at the mic's position,
   `LawnmowerPath` walker). `ui/` Qt windows, `ui/tabs/*`, `ui/widgets/*`, `ui/state.AppState` (shared state + `QSettings`).
 * `CameraTab` is extended through hooks, not subclassing: `pre_frame_hooks`, `texture_provider`, `extra_draw`, `extra_box`,
-  `shutdown_hooks`, `output_provider`, `request_pick`, `add_bottom_widget`. `MappingPanel` is built entirely on these.
+  `shutdown_hooks`, `output_provider`, `request_pick`, `add_bottom_widget`. `MappingPanel`, `DecayPanel` (step 6, extra `overlay_providers` / `overlay_busy` hooks so only one overlay is on) and `AiPanel`
+  (step 7) are built entirely on these.
 
 ## Conventions that matter
 
@@ -47,6 +52,9 @@ roomscape-doctor --all                        # audio / camera / software health
 * **Mic cal** is the mic's deviation from flat: the correction is `measured - cal_dB(f)` (log-frequency interpolation).
 * **Sweeps:** exponential sweep, inverse filter time-reversed with the +6 dB/oct envelope; direct-peak latency is detected;
   harmonic distortion lands at negative time; the valid IR length per band is `rec_len - latency - L ln(f_hi/f1) fs`.
+* **0 Hz:** linear frequency axes start at 0 Hz (`ui/widgets/plots.apply_linear_freq_axis`); the DC bin is never plotted (`spectrum.in_range`).
+* **Decay camera:** one burst = 0.5 s 20-300 Hz sweep + silence, period 1.6 s; the mapper locks onto the direct sound, rejects bursts walked too
+  fast / without a fix / low S/N. Band EDT of a 63 Hz mode differs from the synthetic room's nominal T60: compare against the same chain, not against it.
 * **Camera model:** pose from >= 4 floor pins (`solvePnPGeneric` IPPE + LM refinement). The mic marker is back-projected onto
   the plane at **mic height** with the full pose; the lens FOV is the key unknown, hence the FOV tools. Pinhole only.
 * **Mapping:** magnitude-only multisine analysis (2-period frames, odd bins = noise), so playback and capture need no sync.

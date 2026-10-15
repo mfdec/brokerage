@@ -172,6 +172,49 @@ def run(out_dir: str | None = None, echo: bool = True) -> int:
             raise RuntimeError(f"too few mapped frames: {counts}")
         return f"{counts['accepted']} frames mapped, coverage {mp.mapper.field.coverage() * 100:.0f} %"
 
+    def decay_camera() -> str:
+        import numpy as np  # noqa: PLC0415
+
+        win = ctx["win"]
+        dp = win.decay
+        dp._demo_walk()
+        dp._toggle()
+        ok = _spin_until(lambda: dp.mapper is not None and dp.mapper.counts["accepted"] >= 2, 60)
+        counts = dict(dp.mapper.counts) if dp.mapper is not None else {}
+        f = dp.fields()
+        dp.source.setCurrentIndex(1)
+        _spin(400)
+        dp._toggle()
+        if not ok or f is None or f.n_used < 2:
+            raise RuntimeError(f"too few decay bursts mapped: {counts}")
+        med = float(np.nanmedian(f.edt_s()))
+        return f"{counts['accepted']} bursts mapped, EDT median {med:.2f} s at {f.fc:g} Hz"
+
+    def ai_offline() -> str:
+        import json  # noqa: PLC0415
+
+        from roomscape.ai.analyst import TOOLS, ToolBox, build_evidence, parse_report, user_message  # noqa: PLC0415
+        from roomscape.ai.client import ClaudeClient  # noqa: PLC0415
+        from roomscape.ai.keystore import KeyStore, _WindowsBackend  # noqa: PLC0415
+
+        win = ctx["win"]
+        cfg = win.state.room
+        reply = {"content": [{"type": "text", "text": json.dumps({"summary": "ok", "findings": []})}], "stop_reason": "end_turn", "usage": {}}
+        res = ClaudeClient("sk-ant-selftest" + "0" * 20, transport=lambda u, h, b, t: (200, {}, json.dumps(reply).encode())).run(
+            "s", user_message(build_evidence(cfg, [], win.decay.fields())), TOOLS, ToolBox(cfg, [], lambda f: None))
+        parse_report(res.text, cfg.dims)
+        where = "request loop ok"
+        if sys.platform == "win32":                                    # the real Credential Manager, under a throw-away name
+            ks = KeyStore(_WindowsBackend("RoomScape/SelfTest"))
+            key = "sk-ant-selftest" + "1" * 20
+            ks.set(key)
+            got = ks.get()[0]
+            ks.forget()
+            if got != key or ks.get()[0] is not None:
+                raise RuntimeError("Credential Manager round trip failed")
+            where += ", Credential Manager round trip ok"
+        return where
+
     def screenshot() -> str:
         win = ctx["win"]
         path = out / "roomscape-selftest.png"
@@ -190,7 +233,8 @@ def run(out_dir: str | None = None, echo: bool = True) -> int:
 
     for name, fn in (("Libraries", libraries), ("Signal processing", dsp), ("Main window", window), ("Live analyzer (simulated mic)", live),
                      ("Sweep measurement + room decay", measurement), ("Export", export), ("Camera overlay (simulated camera)", camera),
-                     ("Walk-the-room mapping (virtual walker)", mapping), ("Screenshot", screenshot), ("Shutdown", shutdown)):
+                     ("Walk-the-room mapping (virtual walker)", mapping),
+                     ("Decay camera (burst mapping)", decay_camera), ("AI analyst (offline checks)", ai_offline), ("Screenshot", screenshot), ("Shutdown", shutdown)):
         if name not in ("Libraries", "Signal processing", "Main window") and "win" not in ctx:
             rep.lines.append(f"[skip] {name}")
             continue

@@ -91,8 +91,12 @@ def draw_marker(frame: np.ndarray, cam: RoomCamera, p3, color, label: str = "", 
     cv2.circle(frame, pt, radius, (0, 0, 0), 3, cv2.LINE_AA)
     cv2.circle(frame, pt, radius, color, 2, cv2.LINE_AA)
     if label:
-        cv2.putText(frame, label, (pt[0] + radius + 3, pt[1] + 4), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 3, cv2.LINE_AA)
-        cv2.putText(frame, label, (pt[0] + radius + 3, pt[1] + 4), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA)
+        (tw, _), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+        x = pt[0] + radius + 3
+        if x + tw > frame.shape[1] - 2:                          # no room on the right: put the label on the left of the marker
+            x = max(pt[0] - radius - 3 - tw, 2)
+        cv2.putText(frame, label, (x, pt[1] + 4), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 3, cv2.LINE_AA)
+        cv2.putText(frame, label, (x, pt[1] + 4), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA)
     return pt
 
 

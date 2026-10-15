@@ -123,3 +123,119 @@ def test_save_load_and_csv_of_the_decay_map(win, tmp_path, monkeypatch):
     monkeypatch.setattr(QtWidgets.QFileDialog, "getSaveFileName", staticmethod(lambda *a, **k: (csv_path, "")))
     dp._export_csv()
     assert open(csv_path).read().startswith("x_m,y_m,weight,edt_s,t20_s,") and "Exported" in dp.status.text()
+
+
+# ------------------------------------------------------------------ AI analyst panel (scripted fake server; no network)
+def _fake_frames(dims):
+    from roomscape.core.decaymap import FS_D, DecayFrame
+    from roomscape.core.sweep import ImpulseResponse
+
+    out = []
+    rng = np.random.default_rng(1)
+    for x in np.arange(0.6, 4.5, 0.5):
+        for y in np.arange(0.6, 3.5, 0.5):
+            t60 = 1.5 if x > 3.5 else 0.7                        # a slow back corner
+            n = int(2.5 * FS_D)
+            t = np.arange(n) / FS_D
+            h = np.zeros(n)
+            h[10] = 1.0
+            h += 0.1 * np.sin(2 * np.pi * 63 * t) * np.exp(-6.9078 * t / t60) + 1e-5 * rng.standard_normal(n)
+            out.append(DecayFrame(0.0, (float(x), float(y)), 0.1, ImpulseResponse(h, FS_D, 10, rec_len=n, f1=20.0, sweep_rate_L=0.2), 40.0))
+    return out
+
+
+def test_ai_panel_end_to_end_with_a_scripted_model(win, monkeypatch):
+    import json
+
+    from roomscape.ai.keystore import KeyStore, _MemoryBackend
+    from roomscape.core.decaymap import DecayWalkMapper
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    ai, dp = win.ai, win.decay
+    ai.keys = KeyStore(_MemoryBackend())
+    ai._refresh_key()
+    assert not ai.run_btn.isEnabled() and "No key" in ai.key_status.text()
+    ai.key_edit.setText("not a key")
+    ai._save_key()
+    assert "does not look like" in ai.key_status.text() and not ai.run_btn.isEnabled()
+    key = "sk-ant-api03-" + "k" * 30
+    ai.key_edit.setText(key)
+    ai._save_key()
+    assert ai.run_btn.isEnabled() and ai.key_edit.text() == "" and key not in ai.key_status.text() and "kkkk" in ai.key_status.text()
+
+    ai._run_or_cancel()                                               # nothing measured yet: refuses before any request
+    assert "nothing to analyse" in ai.status.text().lower() and ai.worker is None
+
+    dp.mapper = DecayWalkMapper(win.state.room.dims)
+    dp.mapper.frames.extend(_fake_frames(win.state.room.dims))
+    win.camera_tab.freq.setValue(63.0)
+    assert dp.fields().n_used > 30
+
+    sent = []
+
+    def server(url, headers, body, timeout):
+        req = json.loads(body)
+        sent.append(req)
+        if len(sent) == 1:
+            return 200, {}, json.dumps({"content": [{"type": "tool_use", "id": "t1", "name": "decay_at", "input": {"x": 4.1, "y": 2.0}}],
+                                        "stop_reason": "tool_use", "usage": {"input_tokens": 900, "output_tokens": 30}}).encode()
+        report = {"summary": "The back corner rings longest.", "findings": [{"title": "Slow back corner", "confidence": "high",
+                  "evidence": ["EDT there"], "marks": [{"x": 4.1, "y": 2.0, "label": "slow"}, {"x": 50, "y": 2.0, "label": "bad"}]}],
+                  "suggestions": ["Bass trap"], "limits": []}
+        return 200, {}, json.dumps({"content": [{"type": "text", "text": json.dumps(report)}], "stop_reason": "end_turn",
+                                    "usage": {"input_tokens": 1000, "output_tokens": 200}}).encode()
+
+    ai.transport = server
+    ai.question.setText("why boomy?")
+    ai._run_or_cancel()
+    assert ai.worker is not None and ai.run_btn.text() == "Cancel"
+    assert spin_until(lambda: ai.worker is None, 20)
+    assert len(sent) == 2 and sent[0]["messages"][0]["content"][0]["type"] == "text" and "why boomy?" in sent[0]["messages"][0]["content"][0]["text"]
+    assert sent[0]["model"] == "claude-sonnet-5-5" and len(sent[0]["tools"]) == 5
+    tool_result = sent[1]["messages"][2]["content"][0]
+    assert "edt_s" in tool_result["content"] and not tool_result.get("is_error")
+    txt = ai.out.toPlainText()
+    assert "AI estimate" in txt and "Slow back corner" in txt and "Bass trap" in txt
+    assert [(m.x, m.y) for m in ai.marks] == [(4.1, 2.0)]              # the pin outside the room was dropped
+    assert "2 request" in ai.status.text() and ai.run_btn.text() == "Analyse with Claude"
+    assert key not in json.dumps(sent[0]["messages"]) and key not in ai.out.toPlainText()
+    # pins are drawn on the picture (needs a calibrated camera)
+    ct = calibrated(win)
+    img = ct._work_frame(ct.camera.latest().image)
+    ai.show_marks.setChecked(False)
+    a = ct.process_frame(img.copy(), ct.camera.latest()).copy()
+    ai.show_marks.setChecked(True)
+    b = ct.process_frame(img.copy(), ct.camera.latest())
+    assert np.any(a != b)
+
+
+def test_ai_panel_reports_api_errors_and_can_send_a_picture(win, monkeypatch):
+    import json
+
+    from roomscape.ai.keystore import KeyStore, _MemoryBackend
+    from roomscape.core.decaymap import DecayWalkMapper
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    ai, dp = win.ai, win.decay
+    ai.keys = KeyStore(_MemoryBackend())
+    ai.keys.set("sk-ant-api03-" + "k" * 30)
+    ai._refresh_key()
+    dp.mapper = DecayWalkMapper(win.state.room.dims)
+    dp.mapper.frames.extend(_fake_frames(win.state.room.dims))
+    win.camera_tab.freq.setValue(63.0)
+    dp.fields()
+    ct = calibrated(win)
+    ai.send_image.setChecked(True)
+    ct.process_frame(ct._work_frame(ct.camera.latest().image), ct.camera.latest())
+    bodies = []
+
+    def server(url, headers, body, timeout):
+        bodies.append(json.loads(body))
+        return 401, {}, json.dumps({"error": {"message": "invalid x-api-key"}}).encode()
+
+    ai.transport = server
+    ai._run_or_cancel()
+    assert spin_until(lambda: ai.worker is None, 20)
+    assert "invalid x-api-key" in ai.status.text() and "rejected" in ai.status.text()
+    parts = bodies[0]["messages"][0]["content"]
+    assert parts[0]["type"] == "image" and parts[0]["source"]["media_type"] == "image/jpeg" and len(parts[0]["source"]["data"]) > 1000

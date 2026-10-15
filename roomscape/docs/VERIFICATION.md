@@ -1,8 +1,8 @@
 # What has been verified, and what has not
 
 **Short version:** every algorithm and every screen has been exercised against a *simulation with known ground truth*
-(277 automated tests, run headless on Linux). **Nothing has been run on Windows, with the iMM-6C, with a real speaker,
-or with a real camera yet.** This file says exactly what the simulation can and cannot tell you, and gives the checklist
+(~320 automated tests, run headless on Linux and, for the packaged program, on a Windows runner). **Nothing has been run
+with the iMM-6C, with a real speaker, or with a real camera yet.** This file says exactly what the simulation can and cannot tell you, and gives the checklist
 for closing the gap.
 
 ## 1. Verified by simulation
@@ -24,6 +24,9 @@ distractor objects) with a known pose and lens; a virtual person walks the marke
 | Camera geometry | synthetic scenes, noisy clicks | pose from 4 pins; overlay geometry exact; a wrong FOV shows up as a higher fit error; FOV tools recover the true lens |
 | Marker tracking | sim frames with noise, dimming, occlusion, distractors | marker found within about 1 px; room position within **~6 cm** at 0.5 m/s; re-acquires after occlusion; wrong FOV shows as a position offset |
 | **Walk-the-room map** | virtual walk (32 s) vs. the true standing-wave field of the synthetic room | correlation **r = 0.98 / 0.98 / 0.91 / 0.96** at 34 / 52 / 69 / 100 Hz, RMSE 1.0 – 1.7 dB against a true pattern spanning ~25 dB; every frame accepted in the demo walk; coverage follows the walked area |
+| **Decay camera** (burst sweeps while walking) | scripted burst chain through the simulated room; an exactly known damped-mode impulse response; a slow virtual walk in the UI | a perfect recording through the mapper's synchronisation, gating and windowing gives the same band EDT / T20 as analysing that impulse response directly; for a known 63 Hz mode (T60 0.70 s) T20 / T60 come out within 3 %; bursts recorded too fast, without a marker fix or with low S/N are rejected and counted; the demo walk accepted 30 of 30 bursts. **Not** claimed: that the decay map equals the broadband RT60 of the synthetic room (the synthetic room's bass is a damped modal sum plus a diffuse tail with its own acausal band-limiting ringing, so a band EDT at 63 Hz differs from the nominal T60 by up to ~15 %) |
+| **0 Hz axes** | linear spectrogram / RTA tests, sweep from 5 Hz, response and CSD from the lower limits | DC bin never plotted, nothing breaks down to 0 Hz; what is physically measurable down there is limited by the mic, speaker and Windows (see README) |
+| **AI analyst** | key store, the whole Messages-API tool loop against a scripted fake server (requests, tool results, retries, 401/404/429/529, refusal, cancel, step limit), evidence size and content, tools, report parsing (pins outside the room dropped), the panel end to end in the UI | the request/response handling is tested; **a real call to the Claude API has not been made from here** (no key, and no direct network route in the build sandbox). The first real run with your key is the test of that last hop |
 | Wrong FOV in mapping | same walk with an 8° FOV error | positions shift, yet the standing-wave pattern is still recognisable (r > 0.6) |
 | Spot sweeps while mapping | UI test | position tagged and pinned; sweep audio never enters the map; mapping signal resumes |
 | Live performance | offscreen Qt, simulated mic | ~31 – 33 fps with spectrogram + 3D waterfall, ~3.5 ms per tick, **zero** audio dropouts; camera frame with overlay ~20 ms |
@@ -35,11 +38,14 @@ same simulation.
 ### The packaged Windows program
 
 `RoomScape-<version>-win64.zip` is built with PyInstaller (`packaging/roomscape.spec`) from a pinned set of libraries
-(`packaging/requirements-windows.txt`; the full test suite is run with exactly that set). It was built **under Wine on Linux**
-(`packaging/build_exe_wine.sh`), and the built `RoomScape.exe --selftest` (libraries, DSP, live analyzer, sweep + decay, export,
-camera overlay, walk-the-room mapping, screenshot) was run **under Wine**. That shows the bundle is complete (no missing DLLs,
-data files or hidden imports) but it is *not* a Windows run: real Windows, the real audio stack and real cameras are still on the
-checklist below. Windows SmartScreen will warn about the unsigned exe.
+(`packaging/requirements-windows.txt`; the full test suite is run with exactly that set) by the GitHub Actions workflow
+`.github/workflows/roomscape-windows.yml` on a **real Windows runner** (a commit message containing `[build exe]` triggers it). The
+workflow then starts the built `RoomScape.exe --selftest` (libraries, DSP, live analyzer, sweep + decay, export, camera overlay,
+walk-the-room mapping, decay camera, AI analyst offline checks incl. a real Windows Credential Manager round trip, screenshot) and
+runs the full test suite on Windows. That shows the bundle is complete and the program runs on Windows; the runner has no sound
+card, camera or screen, so the real audio stack, cameras and display scaling are still on the checklist below. Windows SmartScreen
+will warn about the unsigned exe. (`packaging/build_exe_wine.sh` builds under Wine on Linux as a fallback; Wine cannot run the newest
+libraries, so it is not used for releases.)
 
 ### Known limits of the simulation
 
@@ -57,7 +63,7 @@ Tick these off on a Windows 11 machine. `roomscape-doctor --all` covers the firs
 
 **Software and audio**
 - [ ] `scripts\setup.bat` completes; `scripts\run.bat` opens the window with the dark theme at your display scaling
-- [ ] The packaged `RoomScape.exe` starts on a clean Windows 11 (no Python), `RoomScape.exe --selftest` reports ALL CHECKS PASSED
+- [ ] The packaged `RoomScape.exe` starts on your Windows 11 PC (it passed `--selftest` on a Windows runner), `RoomScape.exe --selftest` reports ALL CHECKS PASSED
 - [ ] `roomscape-doctor --all` lists the iMM-6C, reports a sensible noise floor (quiet room: roughly -80 … -60 dBFS), no dropouts, sample rate within 1 %
 - [ ] The mic opens at 44.1 and 48 kHz (WASAPI shared mode with auto-convert); *Rescan* finds a mic plugged in later
 - [ ] Windows *Audio enhancements* off and a fixed input level: levels no longer drift when you clap / play music
@@ -68,6 +74,12 @@ Tick these off on a Windows 11 machine. `roomscape-doctor --all` covers the firs
 - [ ] A sweep through your speakers measures with S/N ≥ 40 dB; the detected latency looks plausible (output + input device latency)
 - [ ] RT60 per octave within ~10 % of REW for the same room, mic position and a similar sweep (see section 3)
 - [ ] A very dead room or a very live one both give sensible notes instead of nonsense numbers
+
+**Decay camera and AI**
+- [ ] The decay burst is audible and not clipping at the default -18 dBFS; the status line reports S/N of 25 dB or more
+- [ ] Walking at ~0.3 m/s accepts most bursts; the EDT map at a mode frequency is higher near that mode's antinodes than at its nodes
+- [ ] Decay camera EDT at a spot agrees with a stand-still sweep (Measure tab) at that spot to about 15 %
+- [ ] AI analyst: save a real key, press Analyse, get a report; the pins land where the text says; note anything the report claims that the numbers do not support
 
 **Camera and mapping**
 - [ ] USB webcam opens (DirectShow, MJPG) and shows its name with `pygrabber` installed

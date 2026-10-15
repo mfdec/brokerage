@@ -10,6 +10,8 @@ microphone. It does the things you actually need when treating a room, in one wi
 | **Room modes** | Enter the room size, speaker and listening position: axial / tangential / oblique modes, predicted bass response, match against what you measured, and the standing-wave pattern in plan and section. |
 | **Camera map** | Point a webcam, **DroidCam** or any **IP camera** at the room, pin four floor points, and the predicted standing-wave field is drawn **on the live picture**. |
 | **Camera map → Walk-the-room** | Stick a coloured marker on the mic, play the mapping signal, and **walk the mic around the room**. The camera tracks the marker, the mic records the bass level, and the app *paints the measured sound field* onto the picture and onto three plan views (measured / model / difference). Stand still and press a button to run a **decay sweep at that spot**; each result is pinned on the picture. |
+| **Camera map → Decay camera** | A separate mode next to the level map: a short **bass sweep repeats every 1.6 s** while you walk slowly with the marked mic. Every burst is turned into an impulse response, so the picture shows **how long the room keeps ringing at each spot** (EDT / T20 of a chosen band) and an **animation of the energy still to come** after the burst: where the sound lingers, and where it is gone first. |
+| **Camera map → AI analyst** *(optional)* | With your own Anthropic (Claude) API key, Claude reads the measured numbers, looks up more detail with tools (modes, decay at a point, other bands) and explains **where and why** the room rings, with suggestions and **pins on the camera picture**. Off unless you add a key; nothing is sent until you press *Analyse*. |
 
 ![Live spectrogram](docs/screenshots/01_live_spectrogram.png)
 
@@ -17,7 +19,11 @@ microphone. It does the things you actually need when treating a room, in one wi
 
 ![Walk-the-room map](docs/screenshots/09_walk_map_result.png)
 
-> **Status: v0.6.** Everything is implemented and verified against a physically-motivated *simulation* (a synthetic
+![Decay camera: decay time (EDT) at 63 Hz on the picture and from above](docs/screenshots/12_decay_camera_edt.png)
+
+![Decay camera: energy still to come 0.45 s after the burst](docs/screenshots/13_decay_camera_energy_left.png)
+
+> **Status: v0.7.** Everything is implemented and verified against a physically-motivated *simulation* (a synthetic
 > room with known decay times and a known standing-wave field, a virtual camera and a virtual person walking
 > through it). It has **not yet been run against real hardware or on Windows**; see
 > [docs/VERIFICATION.md](docs/VERIFICATION.md) for exactly what that means and a checklist to close the gap.
@@ -28,7 +34,7 @@ microphone. It does the things you actually need when treating a room, in one wi
 
 ### Easiest: the packaged program (no Python needed)
 
-Download **`RoomScape-0.6.0-win64.zip`**, unzip the *whole folder* anywhere (for example `C:\RoomScape`) and double-click
+Download **`RoomScape-0.7.0-win64.zip`**, unzip the *whole folder* anywhere (for example `C:\RoomScape`) and double-click
 **`RoomScape.exe`**. The exe is not code-signed, so Windows SmartScreen may say *"Windows protected your PC"*: click
 *More info → Run anyway*. Keep the `_internal` folder next to the exe.
 
@@ -151,7 +157,42 @@ Tips: walk in rows like mowing a lawn; stay a little away from the walls; keep y
 the mic where you can (hold the mic out on a pole or stand); if the painted pattern looks shifted along your path with a network
 camera, raise **Camera delay**.
 
+### 6. Decay camera (how long the room rings, spot by spot)
+Uses the same marker, camera calibration and walking technique as step 5, but a different signal: a **20-300 Hz sweep burst (0.5 s)
+followed by silence, repeated every 1.6 s**. Each burst is recorded, deconvolved into an impulse response and analysed in the
+band you picked in step 4 (1/3, 1/6 or 1 octave), so you get a real decay measurement at the marker's position every 1.6 s.
+
+1. Do steps 1-3 of the walk-the-room mapping (marker colour, camera calibration). Set the *Frequency* in step 4 to the band you care about.
+2. In **6 Decay camera** press **Start decay mapping** and walk **slowly (about 0.3 m/s; the status line warns if you are faster)**.
+   Bursts recorded while you move too fast, with a low signal-to-noise ratio or without a marker fix are skipped and counted.
+3. Choose what the picture shows: **EDT** or **T20** (warm = the room rings longer here, cool = shorter; colours are relative to the median),
+   or **Energy left after the burst** and press **Play decay animation** (or drag *Time after burst*): the colours show how much of the
+   energy is still arriving *t* seconds after the burst, so you can watch the ringing fade from the dead spots first and linger in the
+   slow ones. A fourth plan view shows the EDT map from above. **Save / Load / CSV** work as for the level map.
+4. There is a **Demo: virtual slow walk** for the simulated room.
+
+Decay times in a small room below the Schroeder frequency are properties of individual modes, so expect them to *vary across the room*; that
+variation is the point of the map. Absolute values from a walking burst measurement are good to roughly +-15 %; the pattern is what to trust.
+
+### 7. AI analyst (optional, needs your own Claude API key)
+In the *7 AI analyst* group press **Save key** with a key from <https://console.anthropic.com/> (kept in the **Windows Credential Manager**,
+never in a file; `ANTHROPIC_API_KEY` in the environment also works). **Preview what is sent...** shows the exact data: the room model,
+the mode list, the sweep measurements' summary and the decay map's statistics and coarse grid (plus one camera picture if you tick
+that box). **Analyse with Claude** sends it with your question; Claude may ask the app for more (decay at a point, another band, mode
+pressure at a point). The answer is a summary, findings with the numbers they rest on, things to try, the limits of the data, and
+**pins on the camera picture** for the spots it talks about.
+
+The physics stays in the app: every number comes from the analysis above and Claude only interprets it, so the report is labelled
+*AI estimate*. It is far better than a fixed rule at connecting what you measured (a slow corner at 63 Hz, a mode whose antinode
+sits there, a source position that excites it) but it can still be wrong; use it to decide what to try and re-measure to confirm.
+Costs are billed by Anthropic to your key (a typical run is a few thousand tokens). Without a key the program never goes online.
+
 ## What to expect (accuracy and limits)
+
+* **The frequency axes start at 0 Hz.** The live RTA / spectrogram / 3D waterfall have *linear* axes from 0 Hz (and logarithmic ones
+  down to 2 Hz), the sweep can start at 5 Hz, and the room-mode plots and response start at 0 Hz. Be aware of what is physical: the iMM-6C
+  is a small electret capsule whose response rolls off in the very low bass, speakers rarely reproduce anything below 20 Hz and the
+  Windows audio path may high-pass at a few Hz, so the 0-20 Hz region mostly shows noise, room rumble and the mic's own roll-off.
 
 * **Decay times** are measured with the standard method (sweep, inverse filter, band filtering, Lundeby noise truncation,
   Schroeder integration). Against a synthetic room with known decay times the full chain recovered every octave band from 125 Hz
@@ -184,12 +225,13 @@ camera, raise **Camera delay**.
 
 ```text
 src/roomscape/
-  core/    signal processing: spectrum, sweep/deconvolution, decay, modes, geometry, multisine, field map, mapping (no Qt)
+  core/    signal processing: spectrum, sweep/deconvolution, decay, modes, geometry, multisine, field map, mapping, decay map (no Qt)
+  ai/      optional Claude analyst: Messages-API client + tool loop, evidence/tools/report parsing, key storage (no Qt)
   audio/   sounddevice input/output threads, ring buffer, device discovery
   video/   camera capture, overlay drawing, marker tracking, simulated camera
   sim/     simulated room, virtual walker (used by --sim, the tests and the screenshots)
   ui/      Qt: main window, tabs, widgets
-tests/     ~270 tests; GUI tests run headless (Qt offscreen)
+tests/     ~320 tests; GUI tests run headless (Qt offscreen)
 docs/      PLAN.md (roadmap), VERIFICATION.md (what is verified and how), screenshots/
 scripts/   Windows launchers, make_screenshots.py
 ```
