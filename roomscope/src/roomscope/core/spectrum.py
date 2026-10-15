@@ -67,28 +67,33 @@ def bin_freqs(n_fft: int, fs: float) -> np.ndarray:
 
 
 class SpectrumAverager:
-    """Exponential power averaging with optional decaying peak hold."""
+    """Bias-corrected exponential power averaging with optional decaying peak hold.
+
+    The running sum is divided by the accumulated weight, so the first frames are not over-weighted
+    (a plain exponential average seeded with its first frame stays biased for a long time constant).
+    """
 
     def __init__(self, time_const_s: float = 0.5, peak_decay_db_per_s: float = 8.0):
         self.time_const_s = float(time_const_s)
         self.peak_decay_db_per_s = float(peak_decay_db_per_s)
         self.avg: np.ndarray | None = None
         self.peak: np.ndarray | None = None
+        self._acc: np.ndarray | None = None
+        self._wsum = 0.0
 
     def reset(self) -> None:
-        self.avg = None
-        self.peak = None
+        self.avg = self.peak = self._acc = None
+        self._wsum = 0.0
 
     def update(self, power: np.ndarray, dt: float) -> tuple[np.ndarray, np.ndarray]:
-        if self.avg is None or self.avg.shape != power.shape:
-            self.avg = power.copy()
+        if self._acc is None or self._acc.shape != power.shape:
+            self._acc = np.zeros_like(power)
+            self._wsum = 0.0
             self.peak = power.copy()
-            return self.avg, self.peak
-        if self.time_const_s <= 0:
-            self.avg = power.copy()
-        else:
-            a = float(np.exp(-max(dt, 0.0) / self.time_const_s))
-            self.avg = a * self.avg + (1.0 - a) * power
+        a = 0.0 if self.time_const_s <= 0 else float(np.exp(-max(dt, 0.0) / self.time_const_s))
+        self._acc = a * self._acc + (1.0 - a) * power
+        self._wsum = a * self._wsum + (1.0 - a)
+        self.avg = self._acc / self._wsum
         decay = 10.0 ** (-self.peak_decay_db_per_s * max(dt, 0.0) / 10.0)
         self.peak = np.maximum(self.peak * decay, self.avg)
         return self.avg, self.peak

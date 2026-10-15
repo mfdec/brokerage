@@ -78,3 +78,20 @@ def test_mic_calibration_file_load_and_persist(window, tmp_path):
 
     again = AppState(window.state.settings)                  # same settings store -> restored
     assert again.calibration.mic is not None and again.calibration.mic.freqs.size == 3
+
+
+def test_spectrogram_and_waterfall_update_live(window):
+    window.state.open_source(SIM_DEVICE, 48000)
+    live = window.live
+    spin(1200)
+    assert live.history is not None and live.history.count > 10
+    assert live.spectro._data is not None
+    live.lower.setCurrentIndex(1)                         # 3D waterfall
+    spin(700)
+    assert live.waterfall.slices is not None and live.waterfall.slices.shape[0] >= 8
+    # switching mode / history rebuilds the engine without error and keeps running
+    live.sp_mode.setCurrentText("Bass detail")
+    live.sp_hist.setCurrentIndex(0)
+    spin(500)
+    assert live.spec_engine.settings.mode == "Bass detail"
+    assert window.state.source.xruns == 0

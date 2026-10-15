@@ -95,15 +95,18 @@ def fractional_octave_power(
 ) -> np.ndarray:
     """Band power in 1/N-octave bands around ``f_centers`` (sliding or fixed centres).
 
-    ``min_width_hz`` widens bands that are narrower than the FFT resolution so a
-    tone at low frequency still reads its true level.
+    Bands narrower than ``min_width_hz`` (the analyzer's resolution) are integrated over the wider
+    interval and scaled by ``true_width / used_width``.  Noise therefore reads its true band level at
+    any FFT size (pink noise stays flat); a narrowband tone inside such a sub-resolution band reads
+    low by the same ratio - use the raw "FFT" display (flat-top window) for exact tone levels.
     """
     fc = np.asarray(f_centers, dtype=np.float64)
     k = band_edge_factor(bands_per_octave)
     lo, hi = fc / k, fc * k
+    true_w = hi - lo
+    used_w = true_w
     if min_width_hz > 0:
-        width = hi - lo
         mid = 0.5 * (hi + lo)
-        need = np.maximum(width, min_width_hz)
-        lo, hi = mid - 0.5 * need, mid + 0.5 * need
-    return integrate_bands(power, df, np.maximum(lo, 0.5 * df), hi)
+        used_w = np.maximum(true_w, min_width_hz)
+        lo, hi = mid - 0.5 * used_w, mid + 0.5 * used_w
+    return integrate_bands(power, df, np.maximum(lo, 0.5 * df), hi) * (true_w / used_w)

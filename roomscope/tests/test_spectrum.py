@@ -63,13 +63,17 @@ def test_fractional_octave_modes_read_tone_level_off_bin(res, tol):
     assert -23.01 - tol <= fr.inst_db.max() <= -23.01 + 0.05
 
 
-def test_low_frequency_bands_are_widened_to_fft_resolution():
-    """At 50 Hz a 1/48-octave band (1.5 Hz) is narrower than the FFT resolution; the band is widened to
-    one equivalent-noise-bandwidth so a tone reads within ~1.5 dB (use FFT/flat-top mode for exact tones)."""
-    n = 16384
-    eng = RtaEngine(FS, RtaSettings(fft_size=n, resolution="1/48", averaging_s=0))
-    fr = eng.process(sine(50.3, 0.1, n), 0.03)
-    assert -23.01 - 1.6 <= fr.inst_db.max() <= -23.01 + 0.05
+def test_pink_noise_stays_flat_into_the_bass_with_sub_resolution_bands():
+    """16k FFT at 48 kHz = 2.9 Hz bins; a 1/12-octave band at 40 Hz is only 2.3 Hz wide.  Noise must still read flat."""
+    rng = np.random.default_rng(11)
+    x = 0.1 * pink_noise(FS * 60, rng)
+    eng = RtaEngine(FS, RtaSettings(fft_size=32768, resolution="1/12", averaging_s=120.0))
+    step = 1600
+    for i in range(0, x.size - 32768, step):
+        fr = eng.process(x[i:i + 32768], step / FS)
+    sel = (fr.freqs > 35) & (fr.freqs < 10000)
+    dev = fr.avg_db[sel] - fr.avg_db[sel].mean()
+    assert np.abs(dev).max() < 1.8, np.abs(dev).max()
 
 
 def test_white_noise_overall_level():
@@ -123,3 +127,15 @@ def test_exponential_averaging_converges_and_smooths():
 def test_tone_level_helper_for_calibrator_wizard():
     x = sine(1000.0, 0.02, FS * 2) + 0.0005 * np.random.default_rng(5).standard_normal(FS * 2)
     assert tone_level_dbfs(x, FS, 1000.0) == pytest.approx(20 * np.log10(0.02 / np.sqrt(2)), abs=0.1)
+
+
+def test_exponential_average_is_unbiased_at_start():
+    from roomscope.core.spectrum import SpectrumAverager
+
+    av = SpectrumAverager(time_const_s=100.0)
+    a, _ = av.update(np.array([4.0]), 0.03)
+    assert a[0] == pytest.approx(4.0)                                  # first frame is exactly itself
+    for _ in range(999):
+        a, _ = av.update(np.array([2.0]), 0.03)
+    # ~30 s of 2.0 after one 4.0: weights are ~equal, so the mean is ~2.0 + 2/1000 - not dominated by the seed
+    assert a[0] == pytest.approx(2.0 + 2.0 / 1000, abs=0.01)
