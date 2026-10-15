@@ -1,0 +1,89 @@
+name: RoomScope Windows build
+
+# Builds the packaged Windows program (RoomScope.exe) on a real Windows runner and checks it with its own --selftest.
+# Runs only when the commit message contains "[build exe]" (so ordinary pushes cost nothing) and on the feature branch.
+on:
+  push:
+    branches: ["claude/room-decay-mapping-n2lnxj"]
+    paths:
+      - "roomscope/**"
+      - ".github/workflows/roomscope-windows.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[build exe]')
+    runs-on: windows-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: roomscope
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install the pinned libraries
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r packaging/requirements-windows.txt
+
+      - name: Build RoomScope.exe (PyInstaller)
+        run: python -m PyInstaller --noconfirm --clean --log-level WARN packaging/roomscope.spec
+
+      - name: Self-test of the built program
+        run: |
+          $p = Start-Process -FilePath ".\dist\RoomScope\RoomScope.exe" -ArgumentList "--selftest","--no-pause","--out","selftest" -Wait -PassThru
+          if (Test-Path selftest\roomscope-selftest.txt) { Get-Content selftest\roomscope-selftest.txt } else { Write-Host "no self-test report was written" }
+          if ($p.ExitCode -ne 0) { throw "self-test failed with exit code $($p.ExitCode)" }
+
+      - name: Package
+        run: |
+          Copy-Item packaging\WINDOWS-README.txt dist\RoomScope\README.txt
+          $ver = (Select-String -Path src\roomscope\__init__.py -Pattern '__version__ = "(.+)"').Matches[0].Groups[1].Value
+          Compress-Archive -Path dist\RoomScope -DestinationPath "RoomScope-$ver-win64.zip" -CompressionLevel Optimal
+          Get-Item RoomScope-*.zip | Format-Table Name, Length
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RoomScope-win64
+          path: roomscope/RoomScope-*-win64.zip
+          if-no-files-found: error
+          retention-days: 14
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: selftest-report
+          path: roomscope/selftest
+          if-no-files-found: ignore
+          retention-days: 14
+
+  tests:
+    # The full automated test suite on Windows (informational: a failure here does not block the build).
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[build exe]')
+    runs-on: windows-latest
+    continue-on-error: true
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: roomscope
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r packaging/requirements-windows.txt pytest
+          python -m pip install --no-deps -e .
+      - env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m pytest -q -p no:cacheprovider --durations=10

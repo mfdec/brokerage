@@ -48,6 +48,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--sim", action="store_true", help="start listening to the simulated room immediately")
     parser.add_argument("--selftest", action="store_true", help="check the installation end to end with simulated hardware, then exit")
     parser.add_argument("--out", metavar="FOLDER", help="where --selftest writes its report and screenshot (default: a temporary folder)")
+    parser.add_argument("--no-pause", action="store_true", help="never wait for Enter before closing a console window opened by --doctor / --selftest")
     parser.add_argument("--doctor", nargs=argparse.REMAINDER, metavar="OPTIONS",
                         help="run the audio / camera / software health check (same options as roomscope-doctor, e.g. --doctor --all)")
     args = parser.parse_args(argv)
@@ -56,13 +57,13 @@ def main(argv: list[str] | None = None) -> int:
         from roomscope import diagnostics  # noqa: PLC0415
 
         rc = diagnostics.main(args.doctor)
-        _pause(opened_console)
+        _pause(opened_console and not args.no_pause)
         return rc
     if args.selftest:
         from roomscope import selftest  # noqa: PLC0415
 
         rc = selftest.run(args.out)
-        _pause(opened_console)
+        _pause(opened_console and not args.no_pause)
         return rc
 
     from PySide6 import QtWidgets  # noqa: PLC0415  (keep --version fast and Qt-free)
