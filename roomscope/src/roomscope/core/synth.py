@@ -111,6 +111,15 @@ class SyntheticRoom:
         modal = self.modal_scale * self._modal_raw(rcv, freqs) * self._crossfade(freqs, "lp")
         return direct + modal
 
+    def frequency_response_many(self, points: np.ndarray, freqs) -> np.ndarray:
+        """``frequency_response`` for many receivers at once: shape (P, F)."""
+        pts = np.atleast_2d(np.asarray(points, dtype=np.float64))
+        freqs = np.atleast_1d(np.asarray(freqs, dtype=np.float64))
+        r = np.maximum(np.linalg.norm(pts - self.src[None, :], axis=1), 0.25)
+        direct = np.exp(-2j * np.pi * freqs[None, :] * r[:, None] / self.c) / r[:, None]
+        modal = forced_response(self.dims, self.modes, self.src, pts, freqs, self.t60, self.c)
+        return direct + self.modal_scale * modal * self._crossfade(freqs, "lp")[None, :]
+
     def ir(self, rcv, fs: int, length_s: float = 2.5) -> np.ndarray:
         n = int(round(length_s * fs))
         n_fft = int(2 ** np.ceil(np.log2(n)))

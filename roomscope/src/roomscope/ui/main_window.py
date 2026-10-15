@@ -8,6 +8,7 @@ from roomscope import __version__
 from roomscope.ui.state import AppState
 from roomscope.ui.tabs.camera_tab import CameraTab
 from roomscope.ui.tabs.live_tab import LiveTab
+from roomscope.ui.tabs.mapping_panel import MappingPanel
 from roomscope.ui.tabs.measure_tab import MeasureTab
 from roomscope.ui.tabs.modes_tab import ModesTab
 from roomscope.ui.widgets.device_bar import DeviceBar
@@ -38,6 +39,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.modes = ModesTab(self.state)
         self.tabs.addTab(self.modes, "Room modes")
         self.camera_tab = CameraTab(self.state)
+        self.camera_tab.measure_tab = self.measure
+        self.camera_tab.output_provider = lambda: (self.measure.out_dev.currentData(), self.measure.out_ch.currentText())
+        self.mapping = MappingPanel(self.camera_tab)
         self.tabs.addTab(self.camera_tab, "Camera map")
 
         self.status_left = QtWidgets.QLabel("Ready")

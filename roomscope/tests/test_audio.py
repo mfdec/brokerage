@@ -222,3 +222,38 @@ def test_simulated_input_pump_and_thread():
     src2.stop()
     assert 0.35 * 48000 < src2.ring.total < 0.75 * 48000          # real-time paced (not a burst)
     assert not any(t.name == "sim-audio" for t in threading.enumerate())
+
+
+def test_hardware_stimulus_player_loops_whole_periods_seamlessly_and_fades(fake_sd, monkeypatch):
+    from roomscope.audio.measure import HardwareStimulusPlayer
+    from roomscope.core.multisine import MultisineSpec, generate
+
+    def paced_write(self, data):                                   # a real write blocks until the device has consumed it
+        self.written.append(np.array(data))
+        time.sleep(0.004)
+        return False
+
+    monkeypatch.setattr(FakeStream, "write", paced_write)
+    out = [d for d in devices.list_output_devices() if not d.is_simulated][0]
+    spec = MultisineSpec(48000, 0.5, 20.0, 300.0, True, -20.0)
+    period = generate(spec)
+    pl = HardwareStimulusPlayer(out, "Left")
+    pl.start(spec)
+    assert pl.playing
+    time.sleep(0.15)
+    pl.stop()
+    assert not pl.playing
+    st = FakeStream.instances[-1]
+    assert st.kw["samplerate"] == 48000 and st.kw["channels"] == 2 and st.kw["latency"] == "high"
+    assert st.stopped and st.closed
+    first, tiles, last = st.written[0], st.written[1:-1], st.written[-1]
+    assert len(tiles) >= 2
+    assert tiles[0].shape[0] % period.size == 0                    # the loop tile is a whole number of periods: no seam
+    assert np.allclose(tiles[0][:, 0], np.tile(period, tiles[0].shape[0] // period.size), atol=1e-6)
+    assert np.all(tiles[0][:, 1] == 0)                             # left channel only
+    assert abs(first[0, 0]) < 1e-3 and np.max(np.abs(first[:2400, 0])) < np.max(np.abs(tiles[0][:2400, 0]))   # faded in
+    assert abs(last[-1, 0]) < 0.02 * np.max(np.abs(period))        # faded out: no click when it stops
+    pl2 = HardwareStimulusPlayer(out, "Both")
+    pl2.start(spec)
+    pl2.stop()
+    assert not pl2.playing

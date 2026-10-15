@@ -1,6 +1,187 @@
 # RoomScope
 
-Room acoustics analyzer for Windows 11 (runs anywhere Python + Qt run): live RTA, room decay (RT60 / waterfall),
-room modes and camera-based "walk-the-room" sound-field mapping. Built around the Dayton Audio iMM-6C measurement mic.
+A simplified, REW-style **room analyzer for Windows 11** built around a Dayton Audio **iMM-6C** USB measurement
+microphone. It does the things you actually need when treating a room, in one window:
 
-Work in progress - see `docs/PLAN.md` for the roadmap.
+| Tab | What it does |
+|---|---|
+| **Live** | Real-time analyzer (fractional-octave RTA or FFT), level meter, scrolling **spectrogram** and a rotatable **3D waterfall** at 30+ fps. |
+| **Measure / Decay** | Plays a sweep through your speakers, records it, and gives you the **room decay**: RT60 / EDT / T20 / T30 per octave (or 1/3 octave), clarity C50 / C80, Schroeder decay curves, impulse response, frequency response and a **cumulative-spectral-decay waterfall**. |
+| **Room modes** | Enter the room size, speaker and listening position: axial / tangential / oblique modes, predicted bass response, match against what you measured, and the standing-wave pattern in plan and section. |
+| **Camera map** | Point a webcam, **DroidCam** or any **IP camera** at the room, pin four floor points, and the predicted standing-wave field is drawn **on the live picture**. |
+| **Camera map → Walk-the-room** | Stick a coloured marker on the mic, play the mapping signal, and **walk the mic around the room**. The camera tracks the marker, the mic records the bass level, and the app *paints the measured sound field* onto the picture and onto three plan views (measured / model / difference). Stand still and press a button to run a **decay sweep at that spot**; each result is pinned on the picture. |
+
+![Live spectrogram](docs/screenshots/01_live_spectrogram.png)
+
+![Room decay](docs/screenshots/03_decay_rt60.png)
+
+![Walk-the-room map](docs/screenshots/09_walk_map_result.png)
+
+> **Status: v0.6.** Everything is implemented and verified against a physically-motivated *simulation* (a synthetic
+> room with known decay times and a known standing-wave field, a virtual camera and a virtual person walking
+> through it). It has **not yet been run against real hardware or on Windows**; see
+> [docs/VERIFICATION.md](docs/VERIFICATION.md) for exactly what that means and a checklist to close the gap.
+
+---
+
+## Install (Windows 11)
+
+1. Install **Python 3.11 or 3.12** (64-bit) from <https://www.python.org/downloads/windows/>; tick *"Add python.exe to PATH"*.
+2. Get this folder onto your PC (clone the repository or download the ZIP) and double-click **`scripts\setup.bat`**.
+   It creates a private `.venv` and installs everything (NumPy, SciPy, OpenCV, Qt, pyqtgraph, sounddevice).
+3. Double-click **`scripts\run.bat`** to start RoomScope.
+
+Manual install, any OS: `python -m venv .venv`, activate it, then `pip install -e ".[camnames]"` and run `roomscope`.
+
+**No hardware yet?** Start it with `scripts\run.bat --sim` (or choose *"Simulated room (no hardware)"* as the input).
+Everything below works against the simulated room, simulated camera and a virtual walker, including the
+**"Demo: virtual walk"** button on the Camera tab.
+
+**Something not working?** Run `scripts\doctor.bat --all`. It lists your audio devices and cameras, records a few
+seconds from the mic and reports its noise floor, and says in plain words what looks wrong.
+
+## One-time hardware setup
+
+**Microphone.** Plug in the iMM-6C. In *Windows Settings → System → Sound → Input → (the mic) → Properties*:
+turn **Audio enhancements off**, and set the input **level to a fixed value** (e.g. 50 %) and leave it there; otherwise
+Windows' automatic processing and gain changes will distort every measurement. In *Settings → Privacy & security →
+Microphone* allow desktop apps to use the mic.
+
+**Mic calibration file.** Dayton serves a per-unit calibration file for your serial number (REW / miniDSP text format).
+Press **Mic cal file…** in the top bar and load it. RoomScope subtracts the mic's deviation from flat from the
+response and band levels (decay times do not depend on it). Without it the app tells you the levels are uncorrected.
+
+**Absolute level (optional).** Relative results (decay times, maps, response shape) do not need it. For dB SPL, press
+**SPL reference** and either enter an offset or fit a 94 dB / 1 kHz calibrator on the mic and press *Measure calibrator*.
+Do not touch the Windows input level afterwards.
+
+**Speakers.** Sweeps and the mapping signal play through whatever output you pick on the *Measure* tab (WASAPI,
+shared mode). Use the speaker or subwoofer you care about; the mic hears the room as that speaker excites it.
+For the bass maps use the speaker/sub position you entered on the *Room modes* tab.
+
+**Camera.** Any of these (pick the source on the *Camera map* tab, **Find cameras** scans the local ones):
+
+| Camera | How |
+|---|---|
+| **USB webcam / laptop camera** | Appears in the list. 1280 x 720 is plenty. |
+| **DroidCam (phone as webcam), PC client** | Install the DroidCam Client on the PC and the app on the phone, connect by USB or Wi-Fi in the client, press *Start*. The client adds a virtual webcam called *"DroidCam Source 3"*; **Find cameras** lists it. |
+| **DroidCam without the PC client** | Choose *Network stream* and use `http://PHONE-IP:4747/video` (preset available). |
+| **Android "IP Webcam" app** | `http://PHONE-IP:8080/video` (preset available). |
+| **RTSP camera** | `rtsp://USER:PASSWORD@CAMERA-IP:554/stream1` (preset available). |
+
+Phone and PC must be on the same Wi-Fi network for the network options. Close other programs (Teams, Zoom, browser tabs)
+that might hold a local camera. For network cameras expect 100-400 ms of delay; the mapping panel has a **Camera delay**
+setting to compensate.
+
+## How to use it
+
+### 1. Check the mic (Live tab)
+Choose the iMM-6C in the top bar and press **Start listening**. The level meter, RTA and spectrogram move. Clap once:
+you should see a broadband flash and, in a reverberant room, the decay tail on the spectrogram. Aim for a peak well below
+full scale (a red clip LED latches for two seconds if the input hits full scale).
+
+### 2. Measure the room decay (Measure / Decay tab)
+Pick the output device (your speakers), keep the defaults (6 s sweep, -15 dBFS) and press **Measure**. Raise the amplifier
+volume until the result reports a *signal-to-noise ratio* of 40 dB or more, and keep the room quiet. You get:
+
+* **Room decay (RT60):** EDT, T20, T30 and RT60 per octave band, a broadband value, T_mid and bass ratio. Values that cannot
+  be trusted (too little dynamic range, low B·T at bass, curved decays) are greyed with a note saying why. Click a band to
+  see its Schroeder decay curve with the fitted RT60 line and where the noise floor was cut off. Set your target RT60 range to see it shaded on the chart.
+* **Waterfall:** cumulative spectral decay in 3D or as a 2D decay map, bass presets with long windows for modal ringing.
+* **Frequency response** with selectable smoothing and gating window, and the **impulse response**.
+
+*Decay tail* controls how long it records after the sweep: use about 1.5 x the expected RT60.
+
+### 3. Room modes
+Enter length/width/height, the speaker and the listening position (0,0,0 = front-left floor corner) and the room's bass
+decay time (button: *take from last measurement*). The tab lists the modes, shows the predicted bass response at the
+listening position and, after a measurement, marks which measured peaks match which modes, plus the standing-wave
+pattern at any frequency in plan and section views. The Schroeder frequency tells you up to where modal theory applies.
+
+### 4. Camera overlay (model)
+On the *Camera map* tab: **(1)** connect the camera. **(2)** Put four tape marks on the floor at known positions
+(measured from the front-left corner; spread out, not in a line; room corners work if visible), click **Click points in
+picture** and click each mark in the order listed. **(3)** Set the lens field of view: *Estimate from perspective*,
+*From camera height* (if you know how high the camera is) or *Marker above pin* (hold the marker at mic height above a
+pin and click it) pin it down. The white room outline must hug the real walls and ceiling. **(4)** The predicted standing
+wave at the chosen frequency appears on the picture (warm = louder than the room average, cool = quieter);
+*Snap to nearest mode* jumps to a resonance. The map is drawn at ear height by default; set *Map height* to 0 for the floor.
+
+### 5. Walk-the-room mapping
+1. Fix a **bright, matte, saturated ball or sticker** to the mic stand or the mic itself, a colour nothing else in
+   the view has (hot pink, lime green and orange work well; avoid glossy surfaces and anything near the skin tone).
+2. **Pick marker colour**, then click the marker in the picture. It is remembered for this camera.
+3. Press **Play mapping signal** (a 20-300 Hz multisine; the level setting is its peak digital level). Raise the amplifier
+   until the status line says the signal-to-noise ratio is good (10 dB or more).
+4. Press **Start mapping** and walk slowly (about 0.5 m/s) over the room, holding the mic at ear height and keeping the
+   marker visible to the camera. Each second of audio paints the spot where the marker was. The status line tells you when
+   you are too fast, the marker is lost, the input clips, or the signal is too weak.
+5. The picture overlay and the three plan views fill in. Choose what the picture shows (**Model / Measured / Measured minus
+   model**), pick the frequency, and use *Snap to nearest mode* to see the resonances. Walk the gaps until coverage is high.
+6. **Measure sweep here:** stand still at a spot and press it (or tick the automatic option, which fires after 4 s of
+   standing still). The mapping signal pauses, a decay sweep runs, the result is added to the *Measure* tab tagged with its
+   position, pinned on the picture with its RT60, and the mapping signal resumes.
+7. **Save / Load** keeps a map for later; **Clear map** starts over.
+
+![Walk mapping in progress](docs/screenshots/08_walk_mapping_in_progress.png)
+
+Tips: walk in rows like mowing a lawn; stay a little away from the walls; keep your body out of the line between the speaker and
+the mic where you can (hold the mic out on a pole or stand); if the painted pattern looks shifted along your path with a network
+camera, raise **Camera delay**.
+
+## What to expect (accuracy and limits)
+
+* **Decay times** are measured with the standard method (sweep, inverse filter, band filtering, Lundeby noise truncation,
+  Schroeder integration). Against a synthetic room with known decay times the full chain recovered every octave band from 125 Hz
+  to 8 kHz within about 4 %. Below ~125 Hz decay is dominated by individual modes and the statistical flags (B·T) tell you
+  when a band value is only indicative.
+* **The measured map has a spatial resolution of roughly 0.4 m** (each 1 s of audio is smeared over the area you walked
+  in that second). Standing waves are metres long, so this is plenty; it does mean the map cannot show the sharp null of a
+  perfect mode as deep as the model does, and the *measured minus model* view will show a stripe there. That is expected.
+* **Mapping works up to about 130 Hz** with the default settings (line spacing 2 Hz, walking speed 0.5 m/s). Above that, wavelengths
+  get shorter than the map resolution.
+* The camera estimates the mic's room position from a **single camera** and a **floor calibration**, so the lens field
+  of view matters (a wrong value is invisible on the floor but shifts the mic mapping); use the FOV tools in step 3.
+  In simulation the marker was located to about 6 cm.
+* Levels are **dBFS** until you set an SPL reference. Comparing between rooms needs the same Windows input level.
+
+## Troubleshooting
+
+| Symptom | What to do |
+|---|---|
+| No microphone in the list | Run `roomscope-doctor`; check *Privacy & security → Microphone*, unplug/replug, press *Rescan*. |
+| Levels drift or look compressed | Turn **Audio enhancements** off and fix the input level (see above). |
+| "No clear sweep found" | The speaker is off, muted or not the selected output, the volume is too low, or the wrong mic is selected. |
+| Camera not listed | Start the DroidCam client first and press *Start*; close other camera apps; use *Network stream* instead. |
+| Network camera "could not open" | Same Wi-Fi? Correct IP/port? Windows Firewall may ask to allow Python: allow it on private networks. |
+| Marker not found | Marker must be in view, saturated, unique in colour; raise *Colour tolerance* a little or enable *Follow slow colour drift*; avoid glare. |
+| Map looks shifted or mirrored | Check *Mirror image* for selfie-style cameras; recheck the pin order and the FOV; raise *Camera delay*. |
+| Fit error is high after pinning | A pin is on the wrong spot: compare the numbers in the table with where you clicked. |
+
+## For developers
+
+```text
+src/roomscope/
+  core/    signal processing: spectrum, sweep/deconvolution, decay, modes, geometry, multisine, field map, mapping (no Qt)
+  audio/   sounddevice input/output threads, ring buffer, device discovery
+  video/   camera capture, overlay drawing, marker tracking, simulated camera
+  sim/     simulated room, virtual walker (used by --sim, the tests and the screenshots)
+  ui/      Qt: main window, tabs, widgets
+tests/     ~270 tests; GUI tests run headless (Qt offscreen)
+docs/      PLAN.md (roadmap), VERIFICATION.md (what is verified and how), screenshots/
+scripts/   Windows launchers, make_screenshots.py
+```
+
+```bash
+pip install -e ".[dev]"
+pytest                          # full suite, takes a few minutes (the simulation runs in real time)
+python scripts/make_screenshots.py
+```
+
+See [CLAUDE.md](CLAUDE.md) for architecture notes and the gotchas that cost time (level conventions, the GIL and `QTest.qWait`,
+OpenCV kernel quirks).
+
+## Licence
+
+MIT. Dayton Audio and iMM-6C are trademarks of their owners; RoomScope is an independent hobby project and is not affiliated
+with them or with REW.

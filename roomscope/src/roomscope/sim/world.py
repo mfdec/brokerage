@@ -13,6 +13,7 @@ import numpy as np
 from scipy.signal import fftconvolve
 
 from roomscope.core.modes import RoomDims
+from roomscope.core.multisine import MultisineSpec, line_params
 from roomscope.core.synth import SyntheticRoom, T60Profile
 from roomscope.sim.demo import DemoRoomSignal
 
@@ -23,6 +24,35 @@ DEFAULT_MIC = (3.5, 2.0, 1.2)
 
 def default_room(seed: int = 0) -> SyntheticRoom:
     return SyntheticRoom(DEFAULT_DIMS, DEFAULT_SOURCE, T60Profile(), seed=seed)
+
+
+class LawnmowerPath:
+    """A person sweeping the mic over a rectangle in rows (constant speed, short pauses at the turns)."""
+
+    def __init__(self, x0: float, x1: float, y0: float, y1: float, z: float = 1.2, speed: float = 0.45,
+                 row_spacing: float = 0.5, pause_s: float = 0.4, start_delay_s: float = 0.0):
+        ys = np.arange(y0, y1 + 1e-9, row_spacing)
+        pts = []
+        for i, y in enumerate(ys):
+            a, b = (x0, x1) if i % 2 == 0 else (x1, x0)
+            pts += [(a, y), (b, y)]
+        self.z = z
+        self.pts = np.array(pts, dtype=float)
+        t, bt, bx, by = start_delay_s, [start_delay_s], [self.pts[0, 0]], [self.pts[0, 1]]
+        for i in range(1, len(self.pts)):
+            t += float(np.hypot(*(self.pts[i] - self.pts[i - 1]))) / speed
+            bt.append(t), bx.append(self.pts[i, 0]), by.append(self.pts[i, 1])
+            if pause_s > 0 and i < len(self.pts) - 1:             # stand still for a moment at each turn
+                t += pause_s
+                bt.append(t), bx.append(self.pts[i, 0]), by.append(self.pts[i, 1])
+        self._t, self._x, self._y = np.array(bt), np.array(bx), np.array(by)
+
+    @property
+    def duration(self) -> float:
+        return float(self._t[-1])
+
+    def position(self, t: float) -> tuple[float, float, float]:
+        return float(np.interp(t, self._t, self._x)), float(np.interp(t, self._t, self._y)), self.z
 
 
 class SimWorld:
@@ -43,6 +73,10 @@ class SimWorld:
         self._pending: list[tuple[int, np.ndarray]] = []
         self._ir_cache: dict[tuple, np.ndarray] = {}
         self._demo: DemoRoomSignal | None = None
+        self.walker: LawnmowerPath | None = None      # when set, the microphone follows it (audio clock = world time)
+        self._stim = None                             # (freqs, amplitudes, phases) of the active multisine
+        self._H_key = None
+        self._H = None
 
     # ------------------------------------------------------------------ geometry
     def ir(self, pos=None, length_s: float = 3.0) -> np.ndarray:
@@ -65,6 +99,28 @@ class SimWorld:
             self._ir_cache.clear()
             self._demo = None
 
+    # ------------------------------------------------------------------ walk-the-room support
+    @property
+    def time_s(self) -> float:
+        return self._pos / self.fs
+
+    def marker_xyz(self) -> tuple[float, float, float]:
+        m = self.mic
+        return float(m[0]), float(m[1]), float(m[2])
+
+    def set_stimulus(self, spec: MultisineSpec | None) -> None:
+        """Play (or stop) the mapping multisine through the room: steady-state at the current mic position."""
+        with self._lock:
+            self._stim = None if spec is None else line_params(spec)
+            self._H_key = None
+
+    def _line_gains(self, f: np.ndarray) -> np.ndarray:
+        key = tuple(np.round(self.mic, 2))
+        if key != self._H_key:
+            self._H = self.room.frequency_response(self.mic, f) * self.gain
+            self._H_key = key
+        return self._H
+
     def set_mic_position(self, pos) -> None:
         with self._lock:
             self.mic = np.asarray(pos, dtype=np.float64)
@@ -79,7 +135,15 @@ class SimWorld:
     def render(self, n: int) -> np.ndarray:
         with self._lock:
             out = (self.noise_amp * self._rng.standard_normal(n)).astype(np.float32)
-            if self.demo_on and not self._pending:
+            if self.walker is not None:
+                x, y, z = self.walker.position((self._pos + 0.5 * n) / self.fs)
+                self.mic = np.array([x, y, z])
+            if self._stim is not None:
+                f, a, th = self._stim
+                H = self._line_gains(f)
+                t = (self._pos + np.arange(n)) / self.fs
+                out += (np.cos(np.outer(t, 2.0 * np.pi * f) + (th + np.angle(H))[None, :]) @ (a * np.abs(H))).astype(np.float32)
+            elif self.demo_on and not self._pending:
                 out += self._demo_signal().render(n)
             keep = []
             for start, resp in self._pending:
@@ -127,3 +191,19 @@ class SimPlayer:
     @property
     def playing(self) -> bool:
         return self.world.playing
+
+
+class SimStimulusPlayer:
+    """Plays the mapping multisine into the simulated room (counterpart of ``HardwareStimulusPlayer``)."""
+
+    def __init__(self, world: SimWorld):
+        self.world = world
+        self.playing = False
+
+    def start(self, spec: MultisineSpec) -> None:
+        self.world.set_stimulus(spec)
+        self.playing = True
+
+    def stop(self) -> None:
+        self.world.set_stimulus(None)
+        self.playing = False

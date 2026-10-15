@@ -34,11 +34,13 @@ class MeasureWorker(QtCore.QThread):
     done = QtCore.Signal(object)
     failed = QtCore.Signal(str)
 
-    def __init__(self, source, player, spec: SweepSpec, state: AppState, bands_per_octave: int, parent=None):
+    def __init__(self, source, player, spec: SweepSpec, state: AppState, bands_per_octave: int, parent=None,
+                 position: tuple[float, float] | None = None, label: str = ""):
         super().__init__(parent)
         self.source, self.player, self.spec = source, player, spec
         self.calibration = state.calibration
         self.bands = bands_per_octave
+        self.position, self.label = position, label
         self._cancel = threading.Event()
 
     def cancel(self) -> None:
@@ -48,7 +50,8 @@ class MeasureWorker(QtCore.QThread):
         try:
             rec = record_sweep(self.source, self.player, self.spec, progress=self.progress.emit, cancel=self._cancel)
             self.progress.emit(1.0, "Analyzing...")
-            self.done.emit(analyze_recording(rec, self.spec, self.calibration, self.bands))
+            self.done.emit(analyze_recording(rec, self.spec, self.calibration, self.bands,
+                                             label=self.label, position=self.position))
         except MeasurementCancelled:
             self.failed.emit("Measurement cancelled.")
         except (MeasurementError, AudioError) as e:
@@ -136,7 +139,7 @@ class MeasureTab(QtWidgets.QWidget):
         run = QtWidgets.QHBoxLayout()
         self.measure_btn = QtWidgets.QPushButton("Measure")
         self.measure_btn.setObjectName("primary")
-        self.measure_btn.clicked.connect(self._start)
+        self.measure_btn.clicked.connect(lambda _checked=False: self._start())
         self.cancel_btn = QtWidgets.QPushButton("Cancel")
         self.cancel_btn.clicked.connect(self._cancel)
         self.cancel_btn.setEnabled(False)
@@ -312,18 +315,24 @@ class MeasureTab(QtWidgets.QWidget):
         return HardwarePlayer(dev, self.out_ch.currentText())
 
     # ------------------------------------------------------------------ run
-    def _start(self) -> None:
+    def start_with_position(self, xy: tuple[float, float]) -> bool:
+        """Measure now and tag the result with a position in the room (used by the walk-the-room map)."""
+        return self._start(position=(float(xy[0]), float(xy[1])))
+
+    def _start(self, position: tuple[float, float] | None = None) -> bool:
         src = self.state.source
-        if src is None or not src.running:
-            return
+        if src is None or not src.running or (self.worker is not None and self.worker.isRunning()):
+            return False
         try:
             player = self._make_player()
         except MeasurementError as e:
             QtWidgets.QMessageBox.warning(self, "Measure", str(e))
-            return
+            return False
         spec = SweepSpec(fs=src.fs, duration=float(self.dur.currentData()), level_dbfs=self.level.value(),
                          tail_s=self.tail.value())
-        self.worker = MeasureWorker(src, player, spec, self.state, int(self.bands.currentData()), self)
+        label = f"@({position[0]:.1f}, {position[1]:.1f})" if position is not None else ""
+        self.worker = MeasureWorker(src, player, spec, self.state, int(self.bands.currentData()), self,
+                                    position=position, label=label)
         self.worker.progress.connect(self._on_progress)
         self.worker.done.connect(self._on_done)
         self.worker.failed.connect(self._on_failed)
@@ -333,6 +342,7 @@ class MeasureTab(QtWidgets.QWidget):
         self.progress.setValue(0)
         self.status.setText("Starting...")
         self.worker.start()
+        return True
 
     def _cancel(self) -> None:
         if self.worker is not None:

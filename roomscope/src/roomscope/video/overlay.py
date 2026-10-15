@@ -97,11 +97,16 @@ def draw_marker(frame: np.ndarray, cam: RoomCamera, p3, color, label: str = "", 
 
 
 def draw_trail(frame: np.ndarray, cam: RoomCamera, xy_path: np.ndarray, z: float, color=(255, 255, 255)) -> None:
-    if len(xy_path) < 2:
+    """Polyline of the walked path; rows with NaN coordinates split it into separate pieces."""
+    xy = np.asarray(xy_path, dtype=float)
+    if len(xy) < 2:
         return
-    pts3 = np.column_stack((xy_path, np.full(len(xy_path), z)))
-    uv, _ = cam.project(pts3)
-    ok = np.all(np.isfinite(uv), axis=1)
-    uv = uv[ok].astype(np.int32)
-    if len(uv) >= 2:
-        cv2.polylines(frame, [uv.reshape(-1, 1, 2)], False, color, 2, cv2.LINE_AA)
+    pieces = np.split(xy, np.nonzero(~np.all(np.isfinite(xy), axis=1))[0])
+    for piece in pieces:
+        piece = piece[np.all(np.isfinite(piece), axis=1)]
+        if len(piece) < 2:
+            continue
+        uv, _ = cam.project(np.column_stack((piece, np.full(len(piece), z))))
+        uv = uv[np.all(np.isfinite(uv), axis=1)].astype(np.int32)
+        if len(uv) >= 2:
+            cv2.polylines(frame, [uv.reshape(-1, 1, 2)], False, color, 2, cv2.LINE_AA)

@@ -62,6 +62,9 @@ def _spin(lo, hi, val, step=0.1, suffix="", dec=2) -> QtWidgets.QDoubleSpinBox:
 
 
 class CameraTab(QtWidgets.QWidget):
+    modelChanged = QtCore.Signal()                      # camera pose / calibration changed (or lost)
+    pictureSizeKnown = QtCore.Signal()                  # first frame of a connection arrived (saved settings can be restored)
+
     def __init__(self, state: AppState, parent=None):
         super().__init__(parent)
         self.state = state
@@ -74,11 +77,17 @@ class CameraTab(QtWidgets.QWidget):
         self._tex: np.ndarray | None = None
         self._tex_key = None
         self._mask_cache: dict = {}
-        self._mode = "idle"                     # idle | pin | raised
+        self._mode = "idle"                     # idle | pin | raised | external
+        self._external_pick = None
         self._raised: list[tuple[np.ndarray, np.ndarray]] = []
         self._worker: _Worker | None = None
         self.last_frame_ms = 0.0
         self.extra_draw = []                    # callables(frame, cam_model, tab) used by the mapping extension
+        self.pre_frame_hooks = []               # callables(work_frame, Frame) run before drawing (tracking, mapping)
+        self.texture_provider = None            # callable() -> BGRA texture or None (None = modal model)
+        self.output_provider = None             # callable() -> (DeviceInfo | None, channels)
+        self.measure_tab = None                 # set by the main window: spot sweeps at the marker position
+        self.shutdown_hooks = []
         self._loading = False
 
         root = QtWidgets.QHBoxLayout(self)
@@ -93,7 +102,10 @@ class CameraTab(QtWidgets.QWidget):
         self.view.picked.connect(self._on_picked)
         self.view.pointMoved.connect(self._on_point_moved)
         self.view.pointReleased.connect(lambda _i: self._refit())
-        root.addWidget(self.view, 1)
+        self.right = QtWidgets.QSplitter(QtCore.Qt.Orientation.Vertical)
+        self.right.addWidget(self.view)
+        self.right.setStretchFactor(0, 1)
+        root.addWidget(self.right, 1)
 
         self.timer = QtCore.QTimer(self)
         self.timer.setInterval(33)
@@ -360,6 +372,8 @@ class CameraTab(QtWidgets.QWidget):
 
     def shutdown(self) -> None:
         self.timer.stop()
+        for fn in self.shutdown_hooks:
+            fn()
         self.disconnect_camera()
 
     # ================================================================== pins
@@ -446,7 +460,12 @@ class CameraTab(QtWidgets.QWidget):
         return next((i for i, p in enumerate(self.pins) if p.px is None), None)
 
     def _on_picked(self, u: float, v: float) -> None:
-        if self._mode == "pin":
+        if self._mode == "external":
+            cb, self._external_pick = self._external_pick, None
+            self._stop_pick()
+            if cb is not None:
+                cb(u, v)
+        elif self._mode == "pin":
             i = self._next_unplaced()
             if i is None:
                 self._stop_pick()
@@ -488,12 +507,14 @@ class CameraTab(QtWidgets.QWidget):
         if intr is None or n < 4:
             self.pose_status.setText(f"Camera pose: {n} of {max(len(self.pins), 4)} points clicked (need 4+).")
             self._invalidate()
+            self.modelChanged.emit()
             return
         try:
             cam, rms = fit_camera(img, wxy, intr)
         except GeometryError as e:
             self.pose_status.setText(f"<span style='color:{theme.BAD}'>{e}</span>")
             self._invalidate()
+            self.modelChanged.emit()
             return
         self.cam_model, self.rms = cam, rms
         c = cam.center
@@ -505,6 +526,7 @@ class CameraTab(QtWidgets.QWidget):
         self.cam_h.blockSignals(False)
         self._invalidate()
         self._save_calibration()
+        self.modelChanged.emit()
 
     def _fov_changed(self, v: float) -> None:
         self.fov_slider.blockSignals(True)
@@ -590,6 +612,10 @@ class CameraTab(QtWidgets.QWidget):
         self._tex_key = None
 
     def _texture(self) -> np.ndarray:
+        if self.texture_provider is not None:
+            tex = self.texture_provider()
+            if tex is not None:
+                return tex
         cfg = self.state.room
         c = float(self.contrast.currentData())
         key = (round(self.freq.value(), 2), round(self.plane.value(), 3), c, cfg)
@@ -631,6 +657,8 @@ class CameraTab(QtWidgets.QWidget):
     def process_frame(self, img: np.ndarray, fr=None) -> np.ndarray:
         """Draw overlays on a working-size frame and show it (also used directly by tests / the mapping layer)."""
         out = img
+        for hook in self.pre_frame_hooks:
+            hook(img, fr)
         cm = self.cam_model
         if cm is not None:
             cfg = self.state.room
@@ -649,6 +677,17 @@ class CameraTab(QtWidgets.QWidget):
         self.view.set_frame(out)
         return out
 
+    def add_bottom_widget(self, w: QtWidgets.QWidget) -> None:
+        self.right.addWidget(w)
+        self.right.setStretchFactor(1, 0)
+        self.right.setSizes([620, 230])
+
+    def request_pick(self, callback) -> None:
+        """Let another component grab the next click in the picture (image coordinates)."""
+        self._external_pick = callback
+        self._mode = "external"
+        self.view.pick_mode = True
+
     def _on_size_change(self, size: tuple[int, int]) -> None:
         old = self.work_size
         self.work_size = size
@@ -659,6 +698,7 @@ class CameraTab(QtWidgets.QWidget):
                     p.px = (p.px[0] * sx, p.px[1] * sy)
         else:
             self._load_calibration()
+            self.pictureSizeKnown.emit()
         self.view.points = [p.px for p in self.pins]
         self._pins_changed()
 

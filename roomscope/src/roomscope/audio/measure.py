@@ -9,6 +9,7 @@ from typing import Callable, Protocol
 import numpy as np
 
 from roomscope.core.measurement import MeasurementError
+from roomscope.core.multisine import MultisineSpec, generate
 from roomscope.core.sweep import SweepSpec, recording_length, sweep_signal
 
 from .devices import DeviceInfo, _sd, wasapi_settings
@@ -134,3 +135,73 @@ def record_sweep(
     if progress:
         progress(1.0, "Analyzing...")
     return rec
+
+
+class HardwareStimulusPlayer:
+    """Plays the mapping multisine in a seamless loop on the left / right / both channels of an output device."""
+
+    TILE_S = 0.25
+
+    def __init__(self, device: DeviceInfo, channels: str = "Both"):
+        self.device = device
+        self.channels = channels
+        self._thread: threading.Thread | None = None
+        self._stop = threading.Event()
+        self.playing = False
+        self.underflows = 0
+
+    def start(self, spec: MultisineSpec) -> None:
+        sd = _sd()
+        if sd is None:
+            raise AudioError("Audio backend (PortAudio) is not available.")
+        self.stop()
+        period = generate(spec)
+        tile = np.tile(period, max(int(np.ceil(self.TILE_S * spec.fs / period.size)), 1))       # whole periods: seamless loop
+        n_ch = 1 if self.device.max_output < 2 else 2
+        data = np.zeros((tile.size, n_ch), dtype=np.float32)
+        if n_ch == 1 or self.channels == "Both":
+            data[:] = tile[:, None]
+        elif self.channels == "Left":
+            data[:, 0] = tile
+        else:
+            data[:, 1] = tile
+        ramp = int(0.05 * spec.fs)
+        first = data.copy()
+        first[:ramp] *= np.linspace(0, 1, ramp, dtype=np.float32)[:, None]                        # no click at the start
+        try:
+            stream = sd.OutputStream(device=self.device.index, samplerate=spec.fs, channels=n_ch, dtype="float32",
+                                     latency="high", extra_settings=wasapi_settings(self.device))
+            stream.start()
+        except Exception as e:
+            raise AudioError(f"Could not open output '{self.device.name}' at {spec.fs} Hz: {e}") from e
+        self._stop.clear()
+        self.playing = True
+        self.underflows = 0
+        self._thread = threading.Thread(target=self._loop, args=(stream, first, data, ramp), name="audio-stim", daemon=True)
+        self._thread.start()
+
+    def _loop(self, stream, first: np.ndarray, data: np.ndarray, ramp: int) -> None:
+        try:
+            if stream.write(first):
+                self.underflows += 1
+            while not self._stop.is_set():
+                if stream.write(data):
+                    self.underflows += 1
+            fade = data[:max(ramp, 1)] * np.linspace(1, 0, max(ramp, 1), dtype=np.float32)[:, None]      # no click at the end
+            stream.write(fade)
+            stream.stop()
+        except Exception:
+            pass
+        finally:
+            try:
+                stream.close()
+            except Exception:
+                pass
+            self.playing = False
+
+    def stop(self) -> None:
+        self._stop.set()
+        t, self._thread = self._thread, None
+        if t is not None and t is not threading.current_thread():
+            t.join(timeout=3.0)
+        self.playing = False
