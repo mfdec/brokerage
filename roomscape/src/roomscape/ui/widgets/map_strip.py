@@ -68,7 +68,9 @@ class MapStrip(QtWidgets.QWidget):
             "measured": PlanView("Measured (walk map)"),
             "model": PlanView("Model (modal theory)"),
             "diff": PlanView("Measured minus model"),
+            "decay": PlanView("Decay map"),
         }
         for v in self.views.values():
             lay.addWidget(v, 1)
+        self.views["decay"].setVisible(False)                # shown once the decay camera has data
         self.setMinimumHeight(170)

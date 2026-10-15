@@ -130,6 +130,23 @@ class DecayFields:
     def confidence(self) -> np.ndarray:
         return self.edc.confidence()
 
+    def export_csv(self, path: str, min_weight: float = 0.25) -> int:
+        """One row per mapped cell: position, EDT, T20 and the energy left (dB) at each stored time after the burst."""
+        import csv  # noqa: PLC0415
+
+        edt, t20 = self.edt_s(min_weight), self.t20_s(min_weight)
+        left = np.stack([self.energy_left_db(t, min_weight) for t in self.times], axis=-1)
+        cells = np.argwhere(np.isfinite(left[..., 0]))
+        with open(path, "w", newline="") as fh:
+            w = csv.writer(fh)
+            w.writerow(["x_m", "y_m", "weight", "edt_s", "t20_s"] + [f"left_dB_at_{t:.2f}s" for t in self.times])
+            for iy, ix in cells:
+                row = [f"{self.edc.xs[ix]:.3f}", f"{self.edc.ys[iy]:.3f}", f"{self.edc.w[iy, ix]:.2f}",
+                       "" if not np.isfinite(edt[iy, ix]) else f"{edt[iy, ix]:.3f}", "" if not np.isfinite(t20[iy, ix]) else f"{t20[iy, ix]:.3f}"]
+                wr = left[iy, ix]
+                w.writerow(row + [f"{v:.2f}" for v in wr])
+        return len(cells)
+
     def coverage(self, min_weight: float = 0.5) -> float:
         return self.edc.coverage(min_weight)
 
@@ -140,7 +157,9 @@ class DecayFields:
 
 
 def build_fields(frames, dims: RoomDims, fc: float, bw_oct: float = 1.0 / 3.0, cell: float = 0.1, sigma0: float = 0.22,
-                 min_snr_db: float = 0.0) -> DecayFields:
+                 min_snr_db: float = 0.0, cache: dict | None = None) -> DecayFields:
+    """Rasterise the stored frames for one band.  ``cache`` (any dict) remembers each frame's band metrics so that only new frames
+    cost anything when the map is refreshed during a walk."""
     n_t = int(round(T_GRID_MAX / T_GRID_DT)) + 1
     edt = FieldMap(dims, np.array([0.0]), cell, sigma0)
     t20 = FieldMap(dims, np.array([0.0]), cell, sigma0)
@@ -150,7 +169,12 @@ def build_fields(frames, dims: RoomDims, fc: float, bw_oct: float = 1.0 / 3.0, c
         out.n_frames += 1
         if fr.snr_db < min_snr_db:
             continue
-        m = band_metrics(fr.ir, fc, bw_oct)
+        key = (id(fr), round(float(fc), 4), round(float(bw_oct), 4))
+        m = cache.get(key) if cache is not None else None
+        if m is None:
+            m = band_metrics(fr.ir, fc, bw_oct)
+            if cache is not None:
+                cache[key] = m
         if not m.ok:
             continue
         x, y = fr.xy
@@ -330,3 +354,30 @@ class DecayWalkMapper:
     def accepted_fraction(self) -> float:
         n = sum(self.counts.values())
         return self.counts["accepted"] / n if n else 0.0
+
+
+# =============================================================================== persistence
+def save_frames(frames: list[DecayFrame], path: str, spec: PulseSpec, dims: RoomDims) -> None:
+    """Keep the stored frames (positions + decimated impulse responses) so the map can be re-analysed later."""
+    lens = np.array([f.ir.h.size for f in frames], dtype=np.int64)
+    np.savez_compressed(
+        path, xy=np.array([f.xy for f in frames], dtype=float).reshape(-1, 2), path_m=np.array([f.path_m for f in frames]),
+        snr=np.array([f.snr_db for f in frames]), t_end=np.array([f.t_end for f in frames]), lens=lens,
+        t0=np.array([f.ir.t0 for f in frames], dtype=np.int64), lat=np.array([f.ir.latency_samples for f in frames], dtype=np.int64),
+        rec_len=np.array([f.ir.rec_len for f in frames], dtype=np.int64), L=np.array([f.ir.sweep_rate_L for f in frames]),
+        h=np.concatenate([f.ir.h for f in frames]) if frames else np.zeros(0), dims=dims.as_array(),
+        spec=np.array([spec.fs, spec.f1, spec.f2, spec.sweep_s, spec.period_s, spec.level_dbfs]))
+
+
+def load_frames(path: str) -> tuple[list[DecayFrame], PulseSpec, RoomDims]:
+    d = np.load(path)
+    sp = d["spec"]
+    spec = PulseSpec(int(sp[0]), float(sp[1]), float(sp[2]), float(sp[3]), float(sp[4]), float(sp[5]))
+    frames, off = [], 0
+    for i, n in enumerate(d["lens"]):
+        h = d["h"][off:off + int(n)]
+        off += int(n)
+        ir = ImpulseResponse(h=h.copy(), fs=FS_D, t0=int(d["t0"][i]), latency_samples=int(d["lat"][i]), rec_len=int(d["rec_len"][i]),
+                             f1=spec.f1, sweep_rate_L=float(d["L"][i]))
+        frames.append(DecayFrame(float(d["t_end"][i]), (float(d["xy"][i, 0]), float(d["xy"][i, 1])), float(d["path_m"][i]), ir, float(d["snr"][i])))
+    return frames, spec, RoomDims(*[float(v) for v in d["dims"]])

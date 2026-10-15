@@ -85,6 +85,8 @@ class CameraTab(QtWidgets.QWidget):
         self.extra_draw = []                    # callables(frame, cam_model, tab) used by the mapping extension
         self.pre_frame_hooks = []               # callables(work_frame, Frame) run before drawing (tracking, mapping)
         self.texture_provider = None            # callable() -> BGRA texture or None (None = modal model)
+        self.overlay_providers = []             # more callables(); the first to return a texture wins, then the modal model
+        self.overlay_busy = None                # callable() -> True while one of those providers owns the overlay note text
         self.output_provider = None             # callable() -> (DeviceInfo | None, channels)
         self.measure_tab = None                 # set by the main window: spot sweeps at the marker position
         self.shutdown_hooks = []
@@ -614,6 +616,10 @@ class CameraTab(QtWidgets.QWidget):
     def _texture(self) -> np.ndarray:
         if self.texture_provider is not None:
             tex = self.texture_provider()
+            if tex is not None:
+                return tex
+        for provider in self.overlay_providers:
+            tex = provider()
             if tex is not None:
                 return tex
         cfg = self.state.room

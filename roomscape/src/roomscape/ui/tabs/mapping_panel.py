@@ -454,7 +454,8 @@ class MappingPanel(QtCore.QObject):
     def texture(self):
         mode = self.source.currentIndex()
         if mode == 0:
-            self._note(None)
+            if not (self.tab.overlay_busy and self.tab.overlay_busy()):       # (the decay camera may be showing its own note)
+                self._note(None)
             return None
         if self.mapper is None:
             self._note("Nothing mapped yet: play the mapping signal, start mapping and walk the room.")

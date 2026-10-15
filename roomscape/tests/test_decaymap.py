@@ -142,3 +142,28 @@ def test_energy_left_decays_faster_where_the_edt_is_shorter():
     ta = ideal_metrics(rm, pos_a, 63.0).edt
     tb = ideal_metrics(rm, pos_b, 63.0).edt
     assert (ea - eb) * (ta - tb) > 0 or abs(ta - tb) < 0.03                          # the ordering of the two spots is right
+
+
+def test_frames_round_trip_through_a_file_and_the_csv_is_a_tidy_table(tmp_path):
+    import csv
+
+    from roomscape.core.decaymap import load_frames, save_frames
+
+    mapper, rm = run_walk([(1.5 + 0.3 * k, 2.0, 1.2) for k in range(6)], rm=ModalRoom())
+    assert len(mapper.frames) >= 3
+    path = str(tmp_path / "decay.npz")
+    save_frames(mapper.frames, path, PulseSpec(), DIMS)
+    frames, spec, dims = load_frames(path)
+    assert len(frames) == len(mapper.frames) and spec == PulseSpec() and dims == DIMS
+    a, b = band_metrics(mapper.frames[1].ir, 63.0), band_metrics(frames[1].ir, 63.0)
+    assert b.t20 == pytest.approx(a.t20) and frames[1].xy == pytest.approx(mapper.frames[1].xy)
+    cache = {}
+    f1 = build_fields(frames, dims, 63.0, cache=cache)
+    n_cached = len(cache)
+    f2 = build_fields(frames, dims, 63.0, cache=cache)
+    assert n_cached == len(frames) and len(cache) == n_cached                         # the second build costs nothing
+    out = str(tmp_path / "map.csv")
+    n = f1.export_csv(out)
+    rows = list(csv.reader(open(out)))
+    assert rows[0][:5] == ["x_m", "y_m", "weight", "edt_s", "t20_s"] and len(rows) - 1 == n > 3
+    assert rows[0][5] == "left_dB_at_0.00s" and abs(float(rows[1][5])) < 0.5

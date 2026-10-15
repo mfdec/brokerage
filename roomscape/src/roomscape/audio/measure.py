@@ -151,12 +151,16 @@ class HardwareStimulusPlayer:
         self.underflows = 0
 
     def start(self, spec: MultisineSpec) -> None:
+        self.start_period(generate(spec), spec.fs)
+
+    def start_period(self, period: np.ndarray, fs: int) -> None:
+        """Loop ``period`` (one period of any periodic signal) seamlessly on the chosen channels."""
         sd = _sd()
         if sd is None:
             raise AudioError("Audio backend (PortAudio) is not available.")
         self.stop()
-        period = generate(spec)
-        tile = np.tile(period, max(int(np.ceil(self.TILE_S * spec.fs / period.size)), 1))       # whole periods: seamless loop
+        fs = int(fs)
+        tile = np.tile(period, max(int(np.ceil(self.TILE_S * fs / period.size)), 1))             # whole periods: seamless loop
         n_ch = 1 if self.device.max_output < 2 else 2
         data = np.zeros((tile.size, n_ch), dtype=np.float32)
         if n_ch == 1 or self.channels == "Both":
@@ -165,15 +169,15 @@ class HardwareStimulusPlayer:
             data[:, 0] = tile
         else:
             data[:, 1] = tile
-        ramp = int(0.05 * spec.fs)
+        ramp = int(0.05 * fs)
         first = data.copy()
         first[:ramp] *= np.linspace(0, 1, ramp, dtype=np.float32)[:, None]                        # no click at the start
         try:
-            stream = sd.OutputStream(device=self.device.index, samplerate=spec.fs, channels=n_ch, dtype="float32",
+            stream = sd.OutputStream(device=self.device.index, samplerate=fs, channels=n_ch, dtype="float32",
                                      latency="high", extra_settings=wasapi_settings(self.device))
             stream.start()
         except Exception as e:
-            raise AudioError(f"Could not open output '{self.device.name}' at {spec.fs} Hz: {e}") from e
+            raise AudioError(f"Could not open output '{self.device.name}' at {fs} Hz: {e}") from e
         self._stop.clear()
         self.playing = True
         self.underflows = 0
@@ -205,3 +209,12 @@ class HardwareStimulusPlayer:
         if t is not None and t is not threading.current_thread():
             t.join(timeout=3.0)
         self.playing = False
+
+
+class HardwarePulsePlayer(HardwareStimulusPlayer):
+    """Plays the decay-camera pulse train (a sweep, then silence, repeating) on an output device."""
+
+    def start(self, spec) -> None:                       # spec: core.decaymap.PulseSpec
+        from roomscape.core.decaymap import generate as generate_pulse  # noqa: PLC0415
+
+        self.start_period(generate_pulse(spec), spec.fs)
