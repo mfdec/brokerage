@@ -7,13 +7,15 @@ from PySide6 import QtCore
 from roomscope.audio.devices import DeviceInfo
 from roomscope.audio.engine import AudioError, AudioSource, HardwareInput, SimulatedInput
 from roomscope.core.calibration import Calibration, CalibrationError, load_calibration
-from roomscope.sim.demo import DemoRoomSignal
+from roomscope.core.measurement import MeasurementResult
+from roomscope.sim.world import SimWorld
 
 
 class AppState(QtCore.QObject):
     sourceChanged = QtCore.Signal()
     calibrationChanged = QtCore.Signal()
     message = QtCore.Signal(str)
+    measurementsChanged = QtCore.Signal()
 
     def __init__(self, settings: QtCore.QSettings | None = None, parent=None):
         super().__init__(parent)
@@ -21,14 +23,18 @@ class AppState(QtCore.QObject):
         self.calibration = Calibration()
         self.source: AudioSource | None = None
         self.device: DeviceInfo | None = None
+        self.world: SimWorld | None = None            # simulated room, present while the simulated input is used
+        self.measurements: list[MeasurementResult] = []
         self._restore_calibration()
 
     # ------------------------------------------------------------------ audio
     def open_source(self, device: DeviceInfo, fs: int, channel: int = 0) -> AudioSource:
         self.close_source()
         if device.is_simulated:
-            src: AudioSource = SimulatedInput(DemoRoomSignal(fs), fs, name=device.name)
+            self.world = SimWorld(fs)
+            src: AudioSource = SimulatedInput(self.world, fs, name=device.name)
         else:
+            self.world = None
             src = HardwareInput(device, fs, channel)
         try:
             src.start()
@@ -47,6 +53,15 @@ class AppState(QtCore.QObject):
             self.source.stop()
             self.source = None
             self.sourceChanged.emit()
+
+    def add_measurement(self, result: MeasurementResult) -> None:
+        result.label = result.label or f"#{len(self.measurements) + 1}"
+        self.measurements.append(result)
+        self.measurementsChanged.emit()
+
+    def clear_measurements(self) -> None:
+        self.measurements.clear()
+        self.measurementsChanged.emit()
 
     @property
     def running(self) -> bool:

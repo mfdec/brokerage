@@ -7,6 +7,7 @@ from PySide6 import QtCore, QtWidgets
 from roomscope import __version__
 from roomscope.ui.state import AppState
 from roomscope.ui.tabs.live_tab import LiveTab
+from roomscope.ui.tabs.measure_tab import MeasureTab
 from roomscope.ui.widgets.device_bar import DeviceBar
 
 
@@ -30,6 +31,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.live = LiveTab(self.state)
         self.tabs.addTab(self.live, "Live")
+        self.measure = MeasureTab(self.state)
+        self.tabs.addTab(self.measure, "Measure / Decay")
 
         self.status_left = QtWidgets.QLabel("Ready")
         self.status_right = QtWidgets.QLabel("")

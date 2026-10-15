@@ -32,6 +32,7 @@ class SpectrogramView(pg.PlotWidget):
         self._freqs: np.ndarray | None = None
         self._data: np.ndarray | None = None
         self._hop = 0.05
+        self.time_fmt = "{t:.1f} s ago"
         self._proxy = pg.SignalProxy(self.scene().sigMouseMoved, rateLimit=30, slot=self._on_mouse)
 
     def set_colormap(self, name: str) -> None:
@@ -42,9 +43,13 @@ class SpectrogramView(pg.PlotWidget):
         if self._data is not None:
             self.img.setLevels(self.levels)
 
-    def set_data(self, freqs: np.ndarray, data: np.ndarray, hop_s: float) -> None:
-        """``data``: (n_time, n_freq) dB, row 0 newest."""
-        first = self._freqs is None or self._freqs.shape != freqs.shape or self._data.shape != data.shape
+    def set_time_label(self, label: str, fmt: str) -> None:
+        self.pi.setLabel("left", label)
+        self.time_fmt = fmt
+
+    def set_data(self, freqs: np.ndarray, data: np.ndarray, hop_s: float, reset: bool = False) -> None:
+        """``data``: (n_time, n_freq) dB, row 0 newest (or t = 0 for decay maps)."""
+        first = reset or self._freqs is None or self._freqs.shape != freqs.shape or self._data.shape != data.shape
         self._freqs, self._data, self._hop = freqs, data, hop_s
         self.img.setImage(data, autoLevels=False, levels=self.levels)
         if first:
@@ -65,5 +70,5 @@ class SpectrogramView(pg.PlotWidget):
         if not (0 <= row < self._data.shape[0]) or not (self._freqs[0] <= f <= self._freqs[-1]):
             return
         col = int(np.argmin(np.abs(np.log(self._freqs / f))))
-        self.pi.setTitle(f"{format_freq(self._freqs[col])} Hz   {t:.1f} s ago   {self._data[row, col]:.1f} dB",
+        self.pi.setTitle(f"{format_freq(self._freqs[col])} Hz   {self.time_fmt.format(t=t)}   {self._data[row, col]:.1f} dB",
                          size="10pt", color=theme.TEXT)

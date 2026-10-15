@@ -1,7 +1,9 @@
 """Headless GUI smoke tests (Qt offscreen): the windows build, run against the simulated mic and don't raise."""
 
 import pytest
-from PySide6 import QtCore, QtTest, QtWidgets
+from PySide6 import QtCore, QtWidgets
+
+from helpers import spin, spin_until
 
 from roomscope.audio.devices import SIM_DEVICE
 from roomscope.core.calibration import parse_calibration_text
@@ -27,10 +29,6 @@ def window(qapp, tmp_path):
     yield win
     st.close_source()
     win.close()
-
-
-def spin(ms: int) -> None:
-    QtTest.QTest.qWait(ms)
 
 
 def test_live_tab_runs_against_simulated_mic(window):
@@ -95,3 +93,37 @@ def test_spectrogram_and_waterfall_update_live(window):
     spin(500)
     assert live.spec_engine.settings.mode == "Bass detail"
     assert window.state.source.xruns == 0
+
+
+def test_measure_tab_runs_a_simulated_sweep_and_fills_every_page(window):
+    window.state.open_source(SIM_DEVICE, 48000)
+    spin(600)
+    mt = window.measure
+    window.tabs.setCurrentWidget(mt)
+    assert mt.measure_btn.isEnabled()
+    mt.dur.setCurrentIndex(0)                                   # 2 s quick sweep
+    mt.tail.setValue(1.2)
+    mt._start()
+    assert spin_until(lambda: len(window.state.measurements) == 1, 60)
+    spin_until(lambda: mt.worker is None, 5)
+    res = window.state.measurements[0]
+    assert mt.result is res and "RT60" in mt.summary.text()
+    assert mt.table.rowCount() == len(res.decay.bands) + 1
+    assert mt.rt60._n == len(res.decay.bands)
+    assert mt.wf3d.slices is not None and mt.wf3d.slices.shape[0] == 40
+    assert mt.response_plot._fr is not None and mt.response_plot._fr.level_db.size > 100
+    assert mt.schroeder.curve.getData()[0] is not None
+    # switching display options recomputes without error
+    mt.wf_preset.setCurrentIndex(1)
+    mt.bands.setCurrentIndex(1)
+    spin(500)
+    for i in range(mt.pages.count()):
+        mt.pages.setCurrentIndex(i)
+        spin(80)
+        window.grab()
+
+
+def test_measure_tab_disables_without_input_and_reports_why(window):
+    mt = window.measure
+    assert not mt.measure_btn.isEnabled()
+    assert "Start the microphone" in mt.status.text()

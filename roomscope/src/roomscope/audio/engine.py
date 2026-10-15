@@ -49,14 +49,24 @@ class AudioSource:
 
 
 class HardwareInput(AudioSource):
-    """Records one channel of a real input device through PortAudio."""
+    """Records one channel of a real input device through PortAudio.
 
-    def __init__(self, device: DeviceInfo, fs: int, channel: int = 0, blocksize: int = 0):
+    Uses PortAudio's *blocking* read API in a dedicated thread with a generous internal buffer
+    (``latency='high'``) instead of a Python callback: a callback needs the GIL inside the audio
+    thread, so a GUI repaint holding the GIL for ~10 ms could overflow the device buffer.  With a
+    blocking reader PortAudio fills its own C buffer regardless of what the GUI thread is doing.
+    """
+
+    READ_FRAMES = 1024
+
+    def __init__(self, device: DeviceInfo, fs: int, channel: int = 0, latency="high"):
         super().__init__(fs, device.name)
         self.device = device
         self.channel = int(channel)
-        self.blocksize = int(blocksize)
+        self.latency = latency
         self._stream = None
+        self._thread: threading.Thread | None = None
+        self._stop = threading.Event()
 
     def start(self) -> None:
         sd = _sd()
@@ -68,30 +78,48 @@ class HardwareInput(AudioSource):
         try:
             self._stream = sd.InputStream(
                 device=self.device.index, channels=n_ch, samplerate=self.fs, dtype="float32",
-                blocksize=self.blocksize, latency="low", callback=self._callback,
-                extra_settings=wasapi_settings(self.device),
+                latency=self.latency, extra_settings=wasapi_settings(self.device),
             )
             self._stream.start()
         except Exception as e:
             self._stream = None
             raise AudioError(f"Could not open '{self.device.name}' at {self.fs} Hz: {e}") from e
+        self._stop.clear()
         self.running = True
+        self._thread = threading.Thread(target=self._reader, name="audio-in", daemon=True)
+        self._thread.start()
 
     def stop(self) -> None:
-        s, self._stream = self._stream, None
+        self._stop.set()
         self.running = False
+        s, self._stream = self._stream, None
         if s is not None:
             try:
-                s.stop()
+                s.abort()
+            except Exception:
+                pass
+        t, self._thread = self._thread, None
+        if t is not None and t is not threading.current_thread():
+            t.join(timeout=2.0)
+        if s is not None:
+            try:
                 s.close()
             except Exception:
                 pass
 
-    def _callback(self, indata, frames, time_info, status) -> None:
-        if status:
-            self.xruns += 1
-        ch = min(self.channel, indata.shape[1] - 1)
-        self.ring.write(indata[:, ch])
+    def _reader(self) -> None:
+        stream = self._stream
+        while not self._stop.is_set() and stream is not None:
+            try:
+                data, overflowed = stream.read(self.READ_FRAMES)
+            except Exception as e:
+                if not self._stop.is_set():
+                    self.error = f"{type(e).__name__}: {e}"
+                    self.running = False
+                break
+            if overflowed:
+                self.xruns += 1
+            self.ring.write(data[:, min(self.channel, data.shape[1] - 1)])
 
 
 class SimulatedInput(AudioSource):

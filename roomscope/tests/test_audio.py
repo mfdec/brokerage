@@ -47,10 +47,16 @@ def test_ringbuffer_read_since_cursor():
 # ---------------------------------------------------------------- fake PortAudio
 class FakeStream:
     instances = []
+    script_in: list = []                     # [(block (n,ch) float32, overflowed), ...] returned by read()
 
     def __init__(self, **kw):
         self.kw = kw
         self.started = False
+        self.aborted = False
+        self.stopped = False
+        self.closed = False
+        self.written: list[np.ndarray] = []
+        self._script = list(FakeStream.script_in)
         FakeStream.instances.append(self)
 
     def start(self):
@@ -58,9 +64,26 @@ class FakeStream:
 
     def stop(self):
         self.started = False
+        self.stopped = True
+
+    def abort(self):
+        self.started = False
+        self.aborted = True
 
     def close(self):
-        pass
+        self.closed = True
+
+    def read(self, frames):
+        if self.aborted:
+            raise RuntimeError("stream aborted")
+        if self._script:
+            return self._script.pop(0)
+        time.sleep(0.003)
+        return np.zeros((frames, self.kw["channels"]), dtype=np.float32), False
+
+    def write(self, data):
+        self.written.append(np.array(data))
+        return False
 
 
 def make_fake_sd(fail_open=False):
@@ -77,18 +100,20 @@ def make_fake_sd(fail_open=False):
     sd.check_input_settings = lambda **kw: None
     sd.WasapiSettings = lambda **kw: ("wasapi", kw)
 
-    def input_stream(**kw):
+    def stream_factory(**kw):
         if fail_open:
             raise RuntimeError("Invalid sample rate")
         return FakeStream(**kw)
 
-    sd.InputStream = input_stream
+    sd.InputStream = stream_factory
+    sd.OutputStream = stream_factory
     return sd
 
 
 @pytest.fixture
 def fake_sd(monkeypatch):
     FakeStream.instances.clear()
+    FakeStream.script_in = []
     sd = make_fake_sd()
     monkeypatch.setitem(sys.modules, "sounddevice", sd)
     return sd
@@ -113,21 +138,59 @@ def test_likely_measurement_mic_and_rates(fake_sd):
 
 
 def test_hardware_input_streams_into_ring(fake_sd):
+    FakeStream.script_in = [
+        (np.full((256, 1), 0.25, dtype=np.float32), False),
+        (np.full((256, 1), 0.5, dtype=np.float32), True),          # PortAudio reports an input overflow
+    ]
     mic = devices.likely_measurement_mic(devices.list_input_devices())
     src = HardwareInput(mic, 48000)
     src.start()
     st = FakeStream.instances[-1]
     assert st.started and st.kw["samplerate"] == 48000 and st.kw["channels"] == 1
     assert st.kw["extra_settings"] == ("wasapi", {"auto_convert": True})        # WASAPI rate conversion enabled
-    cb = st.kw["callback"]
-    cb(np.full((256, 1), 0.25, dtype=np.float32), 256, None, None)
-    class Status:  # truthy -> counts as an xrun
-        def __bool__(self): return True
-    cb(np.full((256, 1), 0.5, dtype=np.float32), 256, None, Status())
-    assert src.ring.total == 512 and src.xruns == 1
-    assert src.ring.read_latest(2).tolist() == [0.5, 0.5]
+    assert st.kw["latency"] == "high" and "callback" not in st.kw                # blocking reads, big device buffer
+    deadline = time.time() + 3
+    while src.ring.total < 512 and time.time() < deadline:
+        time.sleep(0.01)
+    assert src.ring.read_range(0, 512).tolist() == [0.25] * 256 + [0.5] * 256
+    assert src.xruns == 1
     src.stop()
-    assert not src.running and not st.started
+    assert not src.running and st.aborted and st.closed
+    assert not any(t.name == "audio-in" for t in threading.enumerate())
+
+
+def test_hardware_input_reports_stream_failure(fake_sd):
+    mic = devices.likely_measurement_mic(devices.list_input_devices())
+    src = HardwareInput(mic, 48000)
+    src.start()
+    FakeStream.instances[-1].aborted = True                  # the fake raises on the next read, like a yanked USB mic
+    deadline = time.time() + 3
+    while src.running and time.time() < deadline:
+        time.sleep(0.01)
+    assert not src.running and "aborted" in (src.error or "")
+    src.stop()
+
+
+def test_hardware_player_channels_and_completion(fake_sd):
+    from roomscope.audio.measure import HardwarePlayer
+
+    out = [d for d in devices.list_output_devices() if not d.is_simulated][0]
+    sig = np.linspace(-1, 1, 5000).astype(np.float32)
+    pl = HardwarePlayer(out, "Left")
+    pl.play(sig, 48000)
+    deadline = time.time() + 3
+    while pl.playing and time.time() < deadline:
+        time.sleep(0.01)
+    assert not pl.playing
+    st = FakeStream.instances[-1]
+    played = np.concatenate(st.written)
+    assert played.shape == (5000, 2)
+    assert np.allclose(played[:, 0], sig) and np.all(played[:, 1] == 0)           # left only
+    assert st.stopped and st.closed and st.kw["latency"] == "high"
+    pl2 = HardwarePlayer(out, "Both")
+    pl2.play(sig, 48000)
+    pl2.stop()                                                                     # abort path
+    assert not pl2.playing
 
 
 def test_hardware_open_failure_becomes_audio_error(monkeypatch):
