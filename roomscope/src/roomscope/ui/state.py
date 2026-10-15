@@ -8,6 +8,8 @@ from roomscope.audio.devices import DeviceInfo
 from roomscope.audio.engine import AudioError, AudioSource, HardwareInput, SimulatedInput
 from roomscope.core.calibration import Calibration, CalibrationError, load_calibration
 from roomscope.core.measurement import MeasurementResult
+from roomscope.core.roomfield import RoomConfig, room_from_json, room_to_json
+from roomscope.core.synth import DEFAULT_T60_BANDS, SyntheticRoom, T60Profile
 from roomscope.sim.world import SimWorld
 
 
@@ -16,6 +18,7 @@ class AppState(QtCore.QObject):
     calibrationChanged = QtCore.Signal()
     message = QtCore.Signal(str)
     measurementsChanged = QtCore.Signal()
+    roomChanged = QtCore.Signal()
 
     def __init__(self, settings: QtCore.QSettings | None = None, parent=None):
         super().__init__(parent)
@@ -25,13 +28,14 @@ class AppState(QtCore.QObject):
         self.device: DeviceInfo | None = None
         self.world: SimWorld | None = None            # simulated room, present while the simulated input is used
         self.measurements: list[MeasurementResult] = []
+        self.room = self._restore_room()
         self._restore_calibration()
 
     # ------------------------------------------------------------------ audio
     def open_source(self, device: DeviceInfo, fs: int, channel: int = 0) -> AudioSource:
         self.close_source()
         if device.is_simulated:
-            self.world = SimWorld(fs)
+            self.world = SimWorld(fs, room=self.synthetic_room(), mic_pos=self.room.listener)
             src: AudioSource = SimulatedInput(self.world, fs, name=device.name)
         else:
             self.world = None
@@ -53,6 +57,28 @@ class AppState(QtCore.QObject):
             self.source.stop()
             self.source = None
             self.sourceChanged.emit()
+
+    # ------------------------------------------------------------------ room model
+    def set_room(self, cfg: RoomConfig) -> None:
+        self.room = cfg
+        self.settings.setValue("room/json", room_to_json(cfg))
+        if self.world is not None:                       # the simulated world follows the model, audio included
+            self.world.set_room(self.synthetic_room(), cfg.listener)
+        self.roomChanged.emit()
+
+    def synthetic_room(self) -> SyntheticRoom:
+        cfg = self.room
+        base = T60Profile(DEFAULT_T60_BANDS)
+        scale = cfg.t60 / base.mean()
+        prof = T60Profile({f: v * scale for f, v in DEFAULT_T60_BANDS.items()})
+        return SyntheticRoom(cfg.dims, cfg.source, prof, temp_c=cfg.temp_c)
+
+    def _restore_room(self) -> RoomConfig:
+        try:
+            raw = self.settings.value("room/json", "", str)
+            return room_from_json(raw) if raw else RoomConfig()
+        except (ValueError, KeyError, TypeError):
+            return RoomConfig()
 
     def add_measurement(self, result: MeasurementResult) -> None:
         result.label = result.label or f"#{len(self.measurements) + 1}"

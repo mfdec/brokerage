@@ -127,3 +127,35 @@ def test_measure_tab_disables_without_input_and_reports_why(window):
     mt = window.measure
     assert not mt.measure_btn.isEnabled()
     assert "Start the microphone" in mt.status.text()
+
+
+def test_modes_tab_follows_room_edits_and_drives_the_simulated_room(window):
+    st = window.state
+    mo = window.modes
+    window.tabs.setCurrentWidget(mo)
+    spin(400)
+    n0 = len(mo.modes)
+    assert n0 > 50 and mo.table.rowCount() == n0 and "Schroeder" in mo.summary.text()
+    first = mo.modes[0].freq
+    assert first == pytest.approx(343.4 / (2 * 5.0), rel=0.01)                      # 5 m length -> 34.3 Hz
+    # editing the length through the UI updates state, modes and (when running) the simulated room
+    st.open_source(SIM_DEVICE, 48000)
+    mo.lx.setValue(6.0)
+    spin(500)
+    assert st.room.dims.lx == 6.0 and st.world.room.dims.lx == 6.0
+    assert mo.modes[0].freq == pytest.approx(343.4 / 12.0, rel=0.01)
+    # dragging the speaker marker in the field view moves the speaker (clamped inside the room)
+    mo.field.src_t.setPos(2.0, 1.5)
+    mo.field._emit_positions()
+    spin(400)
+    assert st.room.source[:2] == pytest.approx((2.0, 1.5), abs=1e-6)
+    # clicking a table row jumps the field view to that mode's frequency
+    mo.table.selectRow(3)
+    spin(300)
+    assert mo.field_f.value() == pytest.approx(mo.modes[3].freq, abs=0.06)
+    # the settings persist
+    from roomscope.ui.state import AppState
+
+    again = AppState(st.settings)
+    assert again.room.dims.lx == 6.0
+    st.close_source()

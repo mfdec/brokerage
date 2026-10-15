@@ -56,6 +56,15 @@ class SimWorld:
             self._ir_cache[key] = h
         return h
 
+    def set_room(self, room: SyntheticRoom, mic_pos=None) -> None:
+        """Swap in a different synthetic room (and optionally move the mic); caches are rebuilt lazily."""
+        with self._lock:
+            self.room = room
+            if mic_pos is not None:
+                self.mic = np.asarray(mic_pos, dtype=np.float64)
+            self._ir_cache.clear()
+            self._demo = None
+
     def set_mic_position(self, pos) -> None:
         with self._lock:
             self.mic = np.asarray(pos, dtype=np.float64)

@@ -52,6 +52,24 @@ def frequency_response(
     return FrequencyResponse(grid, lvl, cal.unit, window_s, smoothing_oct)
 
 
+def bass_response(ir: ImpulseResponse, spec: SweepSpec, cal: Calibration, f_lo: float = 20.0, f_hi: float = 320.0,
+                  window_s: float = 1.0) -> tuple[np.ndarray, np.ndarray]:
+    """Unsmoothed low-frequency response (linear frequency axis, ~0.2 Hz steps) for mode analysis."""
+    fs, t0 = ir.fs, ir.t0
+    n_w = max(min(int(window_s * fs), ir.h.size - t0), 16)
+    seg = ir.h[: t0 + n_w].copy()
+    n_fall = max(int(0.15 * n_w), 8)
+    seg[-n_fall:] *= 0.5 + 0.5 * np.cos(np.pi * np.arange(n_fall) / n_fall)
+    n_fft = int(2 ** np.ceil(np.log2(max(4 * fs, 2 * seg.size))))
+    h = np.fft.rfft(seg, n_fft)
+    f = np.fft.rfftfreq(n_fft, 1.0 / fs)
+    sel = (f >= f_lo) & (f <= f_hi)
+    lvl = 20.0 * np.log10(np.maximum(np.abs(h[sel]), 1e-30)) + level_offset_db(spec, cal)
+    if cal.mic is not None:
+        lvl = lvl - cal.mic.correction_db(f[sel])
+    return f[sel], lvl
+
+
 @dataclass
 class MeasurementResult:
     spec: SweepSpec
@@ -64,6 +82,9 @@ class MeasurementResult:
     label: str = ""
     position: tuple[float, float] | None = None       # (x, y) metres in the room, set for walk-the-room pins
     warnings: list[str] = field(default_factory=list)
+
+    def bass(self, f_hi: float = 320.0, window_s: float = 1.0) -> tuple[np.ndarray, np.ndarray]:
+        return bass_response(self.ir, self.spec, self.calibration, f_hi=f_hi, window_s=window_s)
 
     def waterfall(self, **kw) -> Waterfall:
         """Cumulative spectral decay of this measurement (see ``decay.csd_waterfall`` for parameters)."""
