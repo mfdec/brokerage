@@ -6,6 +6,7 @@ from PySide6 import QtCore, QtWidgets
 
 from roomscope import __version__
 from roomscope.ui.state import AppState
+from roomscope.ui.tabs.camera_tab import CameraTab
 from roomscope.ui.tabs.live_tab import LiveTab
 from roomscope.ui.tabs.measure_tab import MeasureTab
 from roomscope.ui.tabs.modes_tab import ModesTab
@@ -36,6 +37,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.tabs.addTab(self.measure, "Measure / Decay")
         self.modes = ModesTab(self.state)
         self.tabs.addTab(self.modes, "Room modes")
+        self.camera_tab = CameraTab(self.state)
+        self.tabs.addTab(self.camera_tab, "Camera map")
 
         self.status_left = QtWidgets.QLabel("Ready")
         self.status_right = QtWidgets.QLabel("")
@@ -59,5 +62,6 @@ class MainWindow(QtWidgets.QMainWindow):
         )
 
     def closeEvent(self, ev) -> None:
+        self.camera_tab.shutdown()
         self.state.close_source()
         super().closeEvent(ev)
